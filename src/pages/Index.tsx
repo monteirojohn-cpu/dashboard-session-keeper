@@ -1,11 +1,13 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { supabase } from "@/integrations/supabase/client";
 import { DashboardHeader } from "@/components/DashboardHeader";
 import { ChannelCard, type Channel } from "@/components/ChannelCard";
 import { StatsBar } from "@/components/StatsBar";
 import { SettingsDialog } from "@/components/SettingsDialog";
 import { toast } from "sonner";
 import { Loader2, ServerOff } from "lucide-react";
+
+// API URL: em dev usa localhost, em produção usa o mesmo host na porta 3001
+const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3001";
 
 const Index = () => {
   const [channels, setChannels] = useState<Channel[]>([]);
@@ -31,15 +33,17 @@ const Index = () => {
     const dashboardPass = localStorage.getItem("dashboard_pass") || "admin@signal.2025";
 
     try {
-      const { data, error: fnError } = await supabase.functions.invoke("fetch-metrics", {
-        body: {
+      const response = await fetch(`${API_URL}/api/fetch-metrics`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
           dashboardUrl,
           username: dashboardUser,
           password: dashboardPass,
-        },
+        }),
       });
 
-      if (fnError) throw new Error(fnError.message);
+      const data = await response.json();
       if (!data?.success) throw new Error(data?.error || "Falha ao buscar métricas");
 
       const now = new Date().toLocaleTimeString("pt-BR");
@@ -48,7 +52,6 @@ const Index = () => {
         const id = String(ch.id || ch.name);
         const status = ch.status as Channel["status"];
         const prev = prevChannels.find((p) => p.id === id);
-        // Keep statusSince if status hasn't changed, otherwise reset
         const statusSince = prev && prev.status === status && prev.statusSince
           ? prev.statusSince
           : Date.now();
@@ -70,7 +73,6 @@ const Index = () => {
       // Check for newly offline channels and notify
       const notificationsEnabled = localStorage.getItem("notifications_enabled") === "true";
       if (notificationsEnabled && prevChannels.length > 0) {
-        // Degraded OR offline = canal caiu, alertar
         const newlyDown = parsedChannels.filter(
           (ch) => (ch.status === "offline" || ch.status === "degraded") &&
             prevChannels.find((prev) => prev.id === ch.id && prev.status === "online")
@@ -84,7 +86,6 @@ const Index = () => {
       setChannels(parsedChannels);
       setLastUpdate(now);
 
-      // Reset countdown
       const intervalSec = parseInt(localStorage.getItem("auto_refresh_interval") || "30", 10);
       setCountdown(intervalSec);
     } catch (err: any) {
@@ -112,8 +113,10 @@ const Index = () => {
     const telegramChatId = localStorage.getItem("telegram_chat_id");
     if (telegramBotToken && telegramChatId) {
       try {
-        await supabase.functions.invoke("send-telegram", {
-          body: { botToken: telegramBotToken, chatId: telegramChatId, message },
+        await fetch(`${API_URL}/api/send-telegram`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ botToken: telegramBotToken, chatId: telegramChatId, message }),
         });
         toast.info("Notificação Telegram enviada!");
       } catch (err) {
@@ -126,8 +129,10 @@ const Index = () => {
     const whatsappApiKey = localStorage.getItem("whatsapp_apikey");
     if (whatsappPhone && whatsappApiKey) {
       try {
-        await supabase.functions.invoke("send-whatsapp", {
-          body: { phone: whatsappPhone, apiKey: whatsappApiKey, message },
+        await fetch(`${API_URL}/api/send-whatsapp`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ phone: whatsappPhone, apiKey: whatsappApiKey, message }),
         });
         toast.info("Notificação WhatsApp enviada!");
       } catch (err) {
@@ -162,7 +167,6 @@ const Index = () => {
   const onlineCount = channels.filter((c) => c.status === "online").length;
   const offlineCount = channels.filter((c) => c.status === "offline" || c.status === "degraded").length;
 
-  // Sort: offline first, then degraded, then online
   const sortedChannels = [...channels].sort((a, b) => {
     const order = { offline: 0, degraded: 1, online: 2 };
     return order[a.status] - order[b.status];
