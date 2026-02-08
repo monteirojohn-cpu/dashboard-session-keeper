@@ -100,22 +100,36 @@ const Index = () => {
   }, [initialLoad]);
 
   const notifyOfflineChannels = async (offlineChannels: Channel[]) => {
-    const telegramBotToken = localStorage.getItem("telegram_bot_token");
-    const telegramChatId = localStorage.getItem("telegram_chat_id");
-
-    if (!telegramBotToken || !telegramChatId) return;
-
     const message = `🚨 *ALERTA - Canal(is) com Problema*\n\n${offlineChannels
-      .map((ch) => `${ch.status === "offline" ? "❌" : "⚠️"} *${ch.name}* — ${ch.status === "offline" ? "OFFLINE" : "DEGRADADO"}`)
+      .map((ch) => `${ch.status === "offline" ? "❌" : "⚠️"} *${ch.name}* — ${ch.status === "offline" ? "OFFLINE" : "SEM CONEXÃO"}`)
       .join("\n")}\n\n⏰ ${new Date().toLocaleString("pt-BR")}`;
 
-    try {
-      await supabase.functions.invoke("send-telegram", {
-        body: { botToken: telegramBotToken, chatId: telegramChatId, message },
-      });
-      toast.info("Notificação Telegram enviada!");
-    } catch (err) {
-      console.error("Erro ao enviar notificação Telegram:", err);
+    // Telegram
+    const telegramBotToken = localStorage.getItem("telegram_bot_token");
+    const telegramChatId = localStorage.getItem("telegram_chat_id");
+    if (telegramBotToken && telegramChatId) {
+      try {
+        await supabase.functions.invoke("send-telegram", {
+          body: { botToken: telegramBotToken, chatId: telegramChatId, message },
+        });
+        toast.info("Notificação Telegram enviada!");
+      } catch (err) {
+        console.error("Erro ao enviar notificação Telegram:", err);
+      }
+    }
+
+    // WhatsApp (CallMeBot)
+    const whatsappPhone = localStorage.getItem("whatsapp_phone");
+    const whatsappApiKey = localStorage.getItem("whatsapp_apikey");
+    if (whatsappPhone && whatsappApiKey) {
+      try {
+        await supabase.functions.invoke("send-whatsapp", {
+          body: { phone: whatsappPhone, apiKey: whatsappApiKey, message },
+        });
+        toast.info("Notificação WhatsApp enviada!");
+      } catch (err) {
+        console.error("Erro ao enviar notificação WhatsApp:", err);
+      }
     }
   };
 
