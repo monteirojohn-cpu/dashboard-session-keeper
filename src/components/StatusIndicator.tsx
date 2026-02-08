@@ -10,7 +10,7 @@ interface StatusIndicatorProps {
 const statusConfig = {
   online: { color: "bg-online", glow: "glow-green", label: "Online", icon: Wifi },
   offline: { color: "bg-offline", glow: "glow-red", label: "Offline", icon: WifiOff },
-  degraded: { color: "bg-degraded", glow: "glow-yellow", label: "Degradado", icon: AlertTriangle },
+  degraded: { color: "bg-destructive", glow: "glow-red", label: "Sem Conexão", icon: WifiOff },
 };
 
 const sizeMap = {
@@ -32,8 +32,7 @@ export const StatusBadge = ({ status }: { status: ChannelStatus }) => {
   return (
     <span className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-mono font-medium ${
       status === "online" ? "bg-online/10 text-online" :
-      status === "offline" ? "bg-offline/10 text-offline" :
-      "bg-degraded/10 text-degraded"
+      "bg-offline/10 text-offline"
     }`}>
       <Icon className="h-3 w-3" />
       {config.label}
