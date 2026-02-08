@@ -100,9 +100,12 @@ const Index = () => {
   }, [initialLoad]);
 
   const notifyOfflineChannels = async (offlineChannels: Channel[]) => {
-    const message = `🚨 *ALERTA - Canal(is) com Problema*\n\n${offlineChannels
-      .map((ch) => `${ch.status === "offline" ? "❌" : "⚠️"} *${ch.name}* — ${ch.status === "offline" ? "OFFLINE" : "SEM CONEXÃO"}`)
-      .join("\n")}\n\n⏰ ${new Date().toLocaleString("pt-BR")}`;
+    const hora = new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+    const data = new Date().toLocaleDateString("pt-BR");
+    const channelList = offlineChannels
+      .map((ch) => `• ${ch.name}`)
+      .join("\n");
+    const message = `🚨 *SIGNAL MONITOR - ALERTA*\n\n📡 *${offlineChannels.length} canal(is) caíram:*\n\n${channelList}\n\n🕐 *Horário da queda:* ${hora}\n📅 *Data:* ${data}`;
 
     // Telegram
     const telegramBotToken = localStorage.getItem("telegram_bot_token");
