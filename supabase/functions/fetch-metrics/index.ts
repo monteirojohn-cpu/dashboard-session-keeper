@@ -208,9 +208,11 @@ function parseChannel(item: any, idx: number) {
   const isOnline = item.live === true || item.status === 'online' || item.status === 'active' || 
     item.active === true || item.status === 1 || item.running === true || item.state === 'running';
   
-  // Health-based degraded detection (health < 50 = degraded)
+  // Health-based degraded detection
+  // If health is low or no bitrate flowing, channel is degraded (effectively down)
   const health = item.health ?? 100;
-  const isDegraded = isOnline && health < 50;
+  const hasBitrate = item.pipes ? Object.values(item.pipes).some((p: any) => p?.vin?.bitrate > 0) : true;
+  const isDegraded = isOnline && (health < 50 || !hasBitrate);
 
   // Extract bitrate from pipes structure
   let bitrate: string | undefined;

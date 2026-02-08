@@ -60,12 +60,14 @@ const Index = () => {
       const prevChannels = channelsRef.current;
       const notificationsEnabled = localStorage.getItem("notifications_enabled") === "true";
       if (notificationsEnabled && prevChannels.length > 0) {
-        const newlyOffline = parsedChannels.filter(
-          (ch) => ch.status === "offline" && prevChannels.find((prev) => prev.id === ch.id && prev.status === "online")
+        // Degraded OR offline = canal caiu, alertar
+        const newlyDown = parsedChannels.filter(
+          (ch) => (ch.status === "offline" || ch.status === "degraded") &&
+            prevChannels.find((prev) => prev.id === ch.id && prev.status === "online")
         );
-        if (newlyOffline.length > 0) {
-          notifyOfflineChannels(newlyOffline);
-          toast.error(`🚨 ${newlyOffline.length} canal(is) ficaram offline!`);
+        if (newlyDown.length > 0) {
+          notifyOfflineChannels(newlyDown);
+          toast.error(`🚨 ${newlyDown.length} canal(is) caíram!`);
         }
       }
 
@@ -93,8 +95,8 @@ const Index = () => {
 
     if (!telegramBotToken || !telegramChatId) return;
 
-    const message = `🚨 *ALERTA - Canal(is) Offline*\n\n${offlineChannels
-      .map((ch) => `❌ *${ch.name}*`)
+    const message = `🚨 *ALERTA - Canal(is) com Problema*\n\n${offlineChannels
+      .map((ch) => `${ch.status === "offline" ? "❌" : "⚠️"} *${ch.name}* — ${ch.status === "offline" ? "OFFLINE" : "DEGRADADO"}`)
       .join("\n")}\n\n⏰ ${new Date().toLocaleString("pt-BR")}`;
 
     try {
