@@ -43,21 +43,31 @@ const Index = () => {
       if (!data?.success) throw new Error(data?.error || "Falha ao buscar métricas");
 
       const now = new Date().toLocaleTimeString("pt-BR");
-      const parsedChannels: Channel[] = (data.channels || []).map((ch: any) => ({
-        id: String(ch.id || ch.name),
-        name: ch.name || "Canal desconhecido",
-        status: ch.status as Channel["status"],
-        bitrate: ch.bitrate,
-        uptime: ch.uptime,
-        source: ch.source,
-        viewers: ch.viewers,
-        health: ch.health,
-        group: ch.group,
-        lastCheck: now,
-      }));
+      const prevChannels = channelsRef.current;
+      const parsedChannels: Channel[] = (data.channels || []).map((ch: any) => {
+        const id = String(ch.id || ch.name);
+        const status = ch.status as Channel["status"];
+        const prev = prevChannels.find((p) => p.id === id);
+        // Keep statusSince if status hasn't changed, otherwise reset
+        const statusSince = prev && prev.status === status && prev.statusSince
+          ? prev.statusSince
+          : Date.now();
+        return {
+          id,
+          name: ch.name || "Canal desconhecido",
+          status,
+          bitrate: ch.bitrate,
+          uptime: ch.uptime,
+          source: ch.source,
+          viewers: ch.viewers,
+          health: ch.health,
+          group: ch.group,
+          lastCheck: now,
+          statusSince,
+        };
+      });
 
       // Check for newly offline channels and notify
-      const prevChannels = channelsRef.current;
       const notificationsEnabled = localStorage.getItem("notifications_enabled") === "true";
       if (notificationsEnabled && prevChannels.length > 0) {
         // Degraded OR offline = canal caiu, alertar

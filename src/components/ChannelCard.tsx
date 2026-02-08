@@ -1,5 +1,6 @@
+import { useState, useEffect } from "react";
 import { StatusIndicator, StatusBadge, type ChannelStatus } from "./StatusIndicator";
-import { Clock, Activity, ArrowUpRight, Heart } from "lucide-react";
+import { Clock, Activity, ArrowUpRight, Heart, Timer } from "lucide-react";
 
 export interface Channel {
   id: string;
@@ -12,13 +13,34 @@ export interface Channel {
   source?: string;
   health?: number;
   group?: string;
+  statusSince?: number; // timestamp (ms) when status was set
+}
+
+function formatElapsed(ms: number): string {
+  const totalSec = Math.floor(ms / 1000);
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
 }
 
 export const ChannelCard = ({ channel }: { channel: Channel }) => {
+  const [elapsed, setElapsed] = useState("");
+
+  useEffect(() => {
+    if (!channel.statusSince) return;
+    const update = () => {
+      setElapsed(formatElapsed(Date.now() - channel.statusSince!));
+    };
+    update();
+    const id = setInterval(update, 1000);
+    return () => clearInterval(id);
+  }, [channel.statusSince]);
+
   return (
     <div className={`group relative rounded-lg border bg-card p-5 transition-all duration-300 hover:border-muted-foreground/30 ${
       channel.status === "offline" ? "border-offline/30 glow-red" :
-      channel.status === "degraded" ? "border-degraded/30 glow-yellow" :
+      channel.status === "degraded" ? "border-offline/30 glow-red" :
       "border-border"
     }`}>
       <div className="flex items-start justify-between mb-4">
@@ -52,9 +74,15 @@ export const ChannelCard = ({ channel }: { channel: Channel }) => {
             <span className="font-mono text-secondary-foreground">{channel.bitrate}</span>
           </div>
         )}
+        {channel.statusSince && (
+          <div className="flex items-center justify-between text-xs">
+            <span className="text-muted-foreground flex items-center gap-1"><Timer className="h-3 w-3" /> Tempo {channel.status === "online" ? "Online" : "Fora"}</span>
+            <span className="font-mono text-secondary-foreground">{elapsed}</span>
+          </div>
+        )}
         {channel.lastCheck && (
           <div className="flex items-center justify-between text-xs">
-            <span className="text-muted-foreground flex items-center gap-1"><Clock className="h-3 w-3" /> Check</span>
+            <span className="text-muted-foreground flex items-center gap-1"><Clock className="h-3 w-3" /> Atualizado</span>
             <span className="font-mono text-secondary-foreground">{channel.lastCheck}</span>
           </div>
         )}
