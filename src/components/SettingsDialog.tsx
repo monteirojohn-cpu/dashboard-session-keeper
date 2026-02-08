@@ -28,6 +28,12 @@ export const SettingsDialog = ({ open, onOpenChange }: SettingsDialogProps) => {
   const [telegramChatId, setTelegramChatId] = useState(
     () => localStorage.getItem("telegram_chat_id") || ""
   );
+  const [whatsappPhone, setWhatsappPhone] = useState(
+    () => localStorage.getItem("whatsapp_phone") || ""
+  );
+  const [whatsappApiKey, setWhatsappApiKey] = useState(
+    () => localStorage.getItem("whatsapp_apikey") || ""
+  );
   const [notificationsEnabled, setNotificationsEnabled] = useState(
     () => localStorage.getItem("notifications_enabled") === "true"
   );
@@ -41,6 +47,8 @@ export const SettingsDialog = ({ open, onOpenChange }: SettingsDialogProps) => {
     localStorage.setItem("dashboard_pass", dashboardPass);
     localStorage.setItem("telegram_bot_token", telegramBotToken);
     localStorage.setItem("telegram_chat_id", telegramChatId);
+    localStorage.setItem("whatsapp_phone", whatsappPhone);
+    localStorage.setItem("whatsapp_apikey", whatsappApiKey);
     localStorage.setItem("notifications_enabled", String(notificationsEnabled));
     localStorage.setItem("auto_refresh_interval", autoRefreshInterval);
     toast.success("Configurações salvas com sucesso!");
@@ -122,6 +130,26 @@ export const SettingsDialog = ({ open, onOpenChange }: SettingsDialogProps) => {
                 value={telegramChatId}
                 onChange={(e) => setTelegramChatId(e.target.value)}
                 placeholder="-100123456789"
+                className="font-mono text-sm bg-secondary border-border"
+              />
+            </div>
+            <div className="border-t border-border my-3" />
+            <p className="text-xs text-muted-foreground font-mono font-semibold">WhatsApp (CallMeBot)</p>
+            <div className="space-y-2">
+              <Label className="text-xs text-muted-foreground font-mono">Telefone (com DDI, ex: 5551999999999)</Label>
+              <Input
+                value={whatsappPhone}
+                onChange={(e) => setWhatsappPhone(e.target.value)}
+                placeholder="5551999999999"
+                className="font-mono text-sm bg-secondary border-border"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label className="text-xs text-muted-foreground font-mono">API Key (CallMeBot)</Label>
+              <Input
+                value={whatsappApiKey}
+                onChange={(e) => setWhatsappApiKey(e.target.value)}
+                placeholder="123456"
                 className="font-mono text-sm bg-secondary border-border"
               />
             </div>
