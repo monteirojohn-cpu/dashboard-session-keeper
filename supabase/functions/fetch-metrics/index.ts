@@ -147,15 +147,26 @@ Deno.serve(async (req) => {
       // Filter: only include channels that are "live" (actively running)
       const activeItems = rawItems.filter((item: any) => item.live === true);
       
-      // Filter out channels without any bitrate (radios/channels permanently without connection)
-      const withBitrate = activeItems.filter((item: any) => {
-        if (!item.pipes) return false;
-        return Object.values(item.pipes).some((p: any) => p?.vin?.bitrate > 0 || p?.out?.bitrate > 0);
-      });
+      // Exclude known radio/audio-only channels (they never have active streams)
+      const radioNames = new Set([
+        "Punk Rock","TOP Brasil","Sertanejo Raiz","Rádio Torres","Metal","TOP Internacional",
+        "Forro","Rock Baladas","Barzinho","Vibe","Relax","Jazz","Rádio 104","Axe Anos 90",
+        "Rádio Grenal","Rádio Capão","MPB","Rádio Continental","Pagode Anos 90","Hits FM",
+        "Romantica","Academia","Funk","POP Brasil","Rádio Express","Party","HeartBreak",
+        "Super Rock","POP Rock","Rádio Cidreira","Time","Rádio Premium","Rádio Tramandaí",
+        "Infantil","Rádio Eldorado","Funcional HIT","Rádio Boa Nova","Rádio Xangri-lá",
+        "Rádio Liberdade","POP Anos 80","Alma Sertaneja","Rádio Pampa","Rádio Evangelizar",
+        "Flash Back","Reggae","ClipStation Rádio","Allteen","Hip Hop","Rádio Imbé","Rádio Caiçara",
+      ]);
       
-      console.log(`[fetch-metrics] ${rawItems.length} total, ${activeItems.length} live, ${withBitrate.length} com bitrate`);
+      const tvChannels = activeItems.filter((item: any) => !radioNames.has(item.name));
+      console.log(`[fetch-metrics] ${rawItems.length} total, ${activeItems.length} live, ${tvChannels.length} TV (excluindo ${radioNames.size} rádios)`);
 
-      channels = withBitrate.map((item: any, idx: number) => parseChannel(item, idx));
+      channels = tvChannels.map((item: any, idx: number) => parseChannel(item, idx));
+      
+      // Log degraded channels for debugging
+      const degradedChannels = channels.filter((c: any) => c.status === 'degraded');
+      console.log(`[fetch-metrics] ${degradedChannels.length} degradados:`, JSON.stringify(degradedChannels.map((c: any) => c.name)));
     } catch {
       console.log('[fetch-metrics] Resposta não é JSON, tentando parsear HTML/texto');
       channels = parseHtmlMetrics(metricsText);
