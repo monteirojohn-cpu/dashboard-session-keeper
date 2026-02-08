@@ -133,7 +133,7 @@ const Index = () => {
   }, []);
 
   const onlineCount = channels.filter((c) => c.status === "online").length;
-  const offlineCount = channels.filter((c) => c.status === "offline").length;
+  const offlineCount = channels.filter((c) => c.status === "offline" || c.status === "degraded").length;
 
   // Sort: offline first, then degraded, then online
   const sortedChannels = [...channels].sort((a, b) => {

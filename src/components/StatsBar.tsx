@@ -7,8 +7,7 @@ interface StatsBarProps {
 
 export const StatsBar = ({ channels }: StatsBarProps) => {
   const online = channels.filter(c => c.status === "online").length;
-  const offline = channels.filter(c => c.status === "offline").length;
-  const degraded = channels.filter(c => c.status === "degraded").length;
+  const down = channels.filter(c => c.status === "offline" || c.status === "degraded").length;
   const total = channels.length;
   const uptimePercent = total > 0 ? Math.round((online / total) * 100) : 0;
 
@@ -16,7 +15,7 @@ export const StatsBar = ({ channels }: StatsBarProps) => {
     <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
       <StatCard label="Total de Canais" value={String(total)} />
       <StatCard label="Online" value={String(online)} accent="online" />
-      <StatCard label="Offline" value={String(offline)} accent="offline" />
+      <StatCard label="Sem Conexão" value={String(down)} accent="offline" />
       <StatCard label="Uptime Geral" value={`${uptimePercent}%`} accent={uptimePercent > 90 ? "online" : uptimePercent > 50 ? "degraded" : "offline"} />
     </div>
   );

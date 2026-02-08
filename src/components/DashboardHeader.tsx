@@ -43,7 +43,7 @@ export const DashboardHeader = ({
             </span>
             <span className="flex items-center gap-1.5">
               <span className="h-2 w-2 rounded-full bg-offline pulse-dot" />
-              <span className="text-muted-foreground">{offlineCount} offline</span>
+              <span className="text-muted-foreground">{offlineCount} sem conexão</span>
             </span>
             <span className="text-muted-foreground">
               {totalChannels} total
