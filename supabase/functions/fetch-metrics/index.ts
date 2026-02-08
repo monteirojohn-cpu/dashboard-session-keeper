@@ -198,18 +198,45 @@ function extractCookies(headers: Headers): Record<string, string> {
 
 function parseChannel(item: any, idx: number) {
   const name = item.name || item.channel_name || item.title || item.stream || `Canal ${idx + 1}`;
-  const isOnline = item.status === 'online' || item.status === 'active' || item.active === true ||
-    item.status === 1 || item.running === true || item.state === 'running';
-  const isDegraded = item.status === 'degraded' || item.status === 'warning';
+  
+  // Check "live" field first (from the actual API), then fallbacks
+  const isOnline = item.live === true || item.status === 'online' || item.status === 'active' || 
+    item.active === true || item.status === 1 || item.running === true || item.state === 'running';
+  
+  // Health-based degraded detection (health < 50 = degraded)
+  const health = item.health ?? 100;
+  const isDegraded = isOnline && health < 50;
+
+  // Extract bitrate from pipes structure
+  let bitrate: string | undefined;
+  if (item.pipes) {
+    const firstPipe = Object.values(item.pipes)[0] as any;
+    if (firstPipe?.vin?.bitrate) {
+      const kbps = Math.round(firstPipe.vin.bitrate / 1000);
+      bitrate = kbps > 1000 ? `${(kbps / 1000).toFixed(1)} Mbps` : `${kbps} kbps`;
+    }
+  } else if (item.bitrate) {
+    bitrate = `${item.bitrate} kbps`;
+  }
+
+  // Extract source/input URL from pipes
+  let source: string | undefined;
+  if (item.pipes) {
+    const firstPipe = Object.values(item.pipes)[0] as any;
+    source = firstPipe?.vin?.protocol || undefined;
+  }
+  source = source || item.source || item.input || item.url || undefined;
 
   return {
     id: item.id || item.channel_id || String(idx),
     name,
     status: isDegraded ? 'degraded' : isOnline ? 'online' : 'offline',
-    bitrate: item.bitrate || item.input_bitrate || item.kbps ? `${item.kbps || item.bitrate} kbps` : undefined,
+    bitrate,
     uptime: item.uptime || item.runtime || undefined,
-    source: item.source || item.input || item.url || undefined,
+    source,
     viewers: item.viewers || item.clients || undefined,
+    health: isOnline ? health : undefined,
+    group: item.group || undefined,
   };
 }
 
