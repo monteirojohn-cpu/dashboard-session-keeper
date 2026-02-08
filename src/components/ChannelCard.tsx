@@ -1,5 +1,5 @@
 import { StatusIndicator, StatusBadge, type ChannelStatus } from "./StatusIndicator";
-import { Clock, Activity, ArrowUpRight } from "lucide-react";
+import { Clock, Activity, ArrowUpRight, Heart } from "lucide-react";
 
 export interface Channel {
   id: string;
@@ -10,6 +10,8 @@ export interface Channel {
   bitrate?: string;
   viewers?: number;
   source?: string;
+  health?: number;
+  group?: string;
 }
 
 export const ChannelCard = ({ channel }: { channel: Channel }) => {
@@ -30,9 +32,17 @@ export const ChannelCard = ({ channel }: { channel: Channel }) => {
       </div>
 
       <div className="space-y-2.5">
+        {channel.health !== undefined && (
+          <div className="flex items-center justify-between text-xs">
+            <span className="text-muted-foreground flex items-center gap-1"><Heart className="h-3 w-3" /> Health</span>
+            <span className={`font-mono font-semibold ${
+              channel.health > 70 ? "text-online" : channel.health > 40 ? "text-degraded" : "text-offline"
+            }`}>{channel.health}%</span>
+          </div>
+        )}
         {channel.source && (
           <div className="flex items-center justify-between text-xs">
-            <span className="text-muted-foreground">Source</span>
+            <span className="text-muted-foreground">Protocolo</span>
             <span className="font-mono text-secondary-foreground truncate max-w-[140px]">{channel.source}</span>
           </div>
         )}
@@ -42,15 +52,9 @@ export const ChannelCard = ({ channel }: { channel: Channel }) => {
             <span className="font-mono text-secondary-foreground">{channel.bitrate}</span>
           </div>
         )}
-        {channel.uptime && (
-          <div className="flex items-center justify-between text-xs">
-            <span className="text-muted-foreground flex items-center gap-1"><ArrowUpRight className="h-3 w-3" /> Uptime</span>
-            <span className="font-mono text-secondary-foreground">{channel.uptime}</span>
-          </div>
-        )}
         {channel.lastCheck && (
           <div className="flex items-center justify-between text-xs">
-            <span className="text-muted-foreground flex items-center gap-1"><Clock className="h-3 w-3" /> Última verificação</span>
+            <span className="text-muted-foreground flex items-center gap-1"><Clock className="h-3 w-3" /> Check</span>
             <span className="font-mono text-secondary-foreground">{channel.lastCheck}</span>
           </div>
         )}
