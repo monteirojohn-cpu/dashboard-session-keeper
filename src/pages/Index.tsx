@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { DashboardHeader } from "@/components/DashboardHeader";
 import { ChannelCard, type Channel } from "@/components/ChannelCard";
@@ -14,6 +14,13 @@ const Index = () => {
   const [lastUpdate, setLastUpdate] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [initialLoad, setInitialLoad] = useState(true);
+  const [countdown, setCountdown] = useState(0);
+  const channelsRef = useRef<Channel[]>([]);
+
+  // Keep ref in sync
+  useEffect(() => {
+    channelsRef.current = channels;
+  }, [channels]);
 
   const fetchMetrics = useCallback(async () => {
     setIsRefreshing(true);
@@ -35,39 +42,50 @@ const Index = () => {
       if (fnError) throw new Error(fnError.message);
       if (!data?.success) throw new Error(data?.error || "Falha ao buscar métricas");
 
+      const now = new Date().toLocaleTimeString("pt-BR");
       const parsedChannels: Channel[] = (data.channels || []).map((ch: any) => ({
-        id: ch.id || ch.name,
+        id: String(ch.id || ch.name),
         name: ch.name || "Canal desconhecido",
         status: ch.status as Channel["status"],
         bitrate: ch.bitrate,
         uptime: ch.uptime,
         source: ch.source,
         viewers: ch.viewers,
-        lastCheck: new Date().toLocaleTimeString("pt-BR"),
+        health: ch.health,
+        group: ch.group,
+        lastCheck: now,
       }));
 
       // Check for newly offline channels and notify
+      const prevChannels = channelsRef.current;
       const notificationsEnabled = localStorage.getItem("notifications_enabled") === "true";
-      if (notificationsEnabled && channels.length > 0) {
+      if (notificationsEnabled && prevChannels.length > 0) {
         const newlyOffline = parsedChannels.filter(
-          (ch) => ch.status === "offline" && channels.find((prev) => prev.id === ch.id && prev.status === "online")
+          (ch) => ch.status === "offline" && prevChannels.find((prev) => prev.id === ch.id && prev.status === "online")
         );
         if (newlyOffline.length > 0) {
           notifyOfflineChannels(newlyOffline);
+          toast.error(`🚨 ${newlyOffline.length} canal(is) ficaram offline!`);
         }
       }
 
       setChannels(parsedChannels);
-      setLastUpdate(new Date().toLocaleTimeString("pt-BR"));
+      setLastUpdate(now);
+
+      // Reset countdown
+      const intervalSec = parseInt(localStorage.getItem("auto_refresh_interval") || "30", 10);
+      setCountdown(intervalSec);
     } catch (err: any) {
       console.error("Erro ao buscar métricas:", err);
       setError(err.message);
-      toast.error("Erro ao buscar métricas: " + err.message);
+      if (!initialLoad) {
+        toast.error("Erro ao buscar métricas: " + err.message);
+      }
     } finally {
       setIsRefreshing(false);
       setInitialLoad(false);
     }
-  }, [channels]);
+  }, [initialLoad]);
 
   const notifyOfflineChannels = async (offlineChannels: Channel[]) => {
     const telegramBotToken = localStorage.getItem("telegram_bot_token");
@@ -83,23 +101,43 @@ const Index = () => {
       await supabase.functions.invoke("send-telegram", {
         body: { botToken: telegramBotToken, chatId: telegramChatId, message },
       });
+      toast.info("Notificação Telegram enviada!");
     } catch (err) {
       console.error("Erro ao enviar notificação Telegram:", err);
     }
   };
 
+  // Initial fetch
   useEffect(() => {
     fetchMetrics();
   }, []);
 
+  // Auto-refresh interval
   useEffect(() => {
     const intervalSec = parseInt(localStorage.getItem("auto_refresh_interval") || "30", 10);
-    const interval = setInterval(fetchMetrics, intervalSec * 1000);
+    setCountdown(intervalSec);
+    const interval = setInterval(() => {
+      fetchMetrics();
+    }, intervalSec * 1000);
     return () => clearInterval(interval);
   }, [fetchMetrics]);
 
+  // Countdown ticker
+  useEffect(() => {
+    const tick = setInterval(() => {
+      setCountdown((prev) => (prev > 0 ? prev - 1 : 0));
+    }, 1000);
+    return () => clearInterval(tick);
+  }, []);
+
   const onlineCount = channels.filter((c) => c.status === "online").length;
   const offlineCount = channels.filter((c) => c.status === "offline").length;
+
+  // Sort: offline first, then degraded, then online
+  const sortedChannels = [...channels].sort((a, b) => {
+    const order = { offline: 0, degraded: 1, online: 2 };
+    return order[a.status] - order[b.status];
+  });
 
   return (
     <div className="min-h-screen bg-background grid-bg">
@@ -115,11 +153,26 @@ const Index = () => {
       <main className="container py-6 space-y-6">
         <StatsBar channels={channels} />
 
-        {lastUpdate && (
-          <p className="text-xs text-muted-foreground font-mono">
-            Última atualização: {lastUpdate}
+        <div className="flex items-center justify-between">
+          {lastUpdate && (
+            <p className="text-xs text-muted-foreground font-mono">
+              Última atualização: {lastUpdate}
+            </p>
+          )}
+          <p className="text-xs text-muted-foreground font-mono flex items-center gap-2">
+            {isRefreshing ? (
+              <>
+                <Loader2 className="h-3 w-3 animate-spin text-primary" />
+                Atualizando...
+              </>
+            ) : (
+              <>
+                <span className="h-1.5 w-1.5 rounded-full bg-primary pulse-dot inline-block" />
+                Próximo refresh em {countdown}s
+              </>
+            )}
           </p>
-        )}
+        </div>
 
         {initialLoad && isRefreshing ? (
           <div className="flex flex-col items-center justify-center py-20 gap-3">
@@ -138,7 +191,7 @@ const Index = () => {
           </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-            {channels.map((channel) => (
+            {sortedChannels.map((channel) => (
               <ChannelCard key={channel.id} channel={channel} />
             ))}
           </div>
