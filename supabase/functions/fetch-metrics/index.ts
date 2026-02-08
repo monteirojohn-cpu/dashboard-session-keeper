@@ -145,11 +145,17 @@ Deno.serve(async (req) => {
       }
 
       // Filter: only include channels that are "live" (actively running)
-      // Channels with live === false or missing are permanently disabled
       const activeItems = rawItems.filter((item: any) => item.live === true);
-      console.log(`[fetch-metrics] ${rawItems.length} canais total, ${activeItems.length} ativos (live=true)`);
+      
+      // Filter out channels without any bitrate (radios/channels permanently without connection)
+      const withBitrate = activeItems.filter((item: any) => {
+        if (!item.pipes) return false;
+        return Object.values(item.pipes).some((p: any) => p?.vin?.bitrate > 0 || p?.out?.bitrate > 0);
+      });
+      
+      console.log(`[fetch-metrics] ${rawItems.length} total, ${activeItems.length} live, ${withBitrate.length} com bitrate`);
 
-      channels = activeItems.map((item: any, idx: number) => parseChannel(item, idx));
+      channels = withBitrate.map((item: any, idx: number) => parseChannel(item, idx));
     } catch {
       console.log('[fetch-metrics] Resposta não é JSON, tentando parsear HTML/texto');
       channels = parseHtmlMetrics(metricsText);
