@@ -132,25 +132,30 @@ Deno.serve(async (req) => {
     let channels: any[] = [];
     try {
       const metricsData = JSON.parse(metricsText);
-      // Adapt based on the actual structure of the metrics response
+      let rawItems: any[] = [];
+      
       if (Array.isArray(metricsData)) {
-        channels = metricsData.map((item: any, idx: number) => parseChannel(item, idx));
+        rawItems = metricsData;
       } else if (metricsData.channels) {
-        channels = metricsData.channels.map((item: any, idx: number) => parseChannel(item, idx));
+        rawItems = metricsData.channels;
       } else if (metricsData.data) {
-        const data = Array.isArray(metricsData.data) ? metricsData.data : [metricsData.data];
-        channels = data.map((item: any, idx: number) => parseChannel(item, idx));
+        rawItems = Array.isArray(metricsData.data) ? metricsData.data : [metricsData.data];
       } else {
-        // Single object, wrap it
-        channels = [parseChannel(metricsData, 0)];
+        rawItems = [metricsData];
       }
+
+      // Filter: only include channels that are "live" (actively running)
+      // Channels with live === false or missing are permanently disabled
+      const activeItems = rawItems.filter((item: any) => item.live === true);
+      console.log(`[fetch-metrics] ${rawItems.length} canais total, ${activeItems.length} ativos (live=true)`);
+
+      channels = activeItems.map((item: any, idx: number) => parseChannel(item, idx));
     } catch {
-      // Not JSON - try parsing HTML table or text
       console.log('[fetch-metrics] Resposta não é JSON, tentando parsear HTML/texto');
       channels = parseHtmlMetrics(metricsText);
     }
 
-    console.log(`[fetch-metrics] ${channels.length} canais encontrados`);
+    console.log(`[fetch-metrics] ${channels.length} canais retornados`);
 
     return new Response(
       JSON.stringify({ success: true, channels, rawLength: metricsText.length }),
