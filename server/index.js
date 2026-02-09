@@ -1,5 +1,6 @@
 const express = require('express');
 const cors = require('cors');
+const { getDb } = require('./db');
 
 const app = express();
 const PORT = process.env.API_PORT || 3001;
@@ -7,27 +8,24 @@ const PORT = process.env.API_PORT || 3001;
 app.use(cors());
 app.use(express.json());
 
+// Initialize DB on startup
+const db = getDb();
+
 // ==================== SESSION CACHE ====================
-// Stores authenticated cookies per dashboardUrl to avoid re-login every request
 const sessionCache = {};
-const SESSION_MAX_AGE_MS = 5 * 60 * 1000; // Re-authenticate every 5 minutes
+const SESSION_MAX_AGE_MS = 5 * 60 * 1000;
 
 async function getAuthenticatedCookies(dashboardUrl, username, password, forceRenew = false) {
   const cacheKey = `${dashboardUrl}|${username}`;
   const cached = sessionCache[cacheKey];
 
   if (!forceRenew && cached && (Date.now() - cached.timestamp < SESSION_MAX_AGE_MS)) {
-    console.log(`[session] Usando sessão em cache (${Math.round((Date.now() - cached.timestamp) / 1000)}s atrás)`);
     return { cookies: cached.cookies, fromCache: true };
   }
 
-  console.log(`[session] ${forceRenew ? 'Forçando renovação' : 'Sessão expirada/inexistente'} - fazendo login em ${dashboardUrl}`);
+  console.log(`[session] ${forceRenew ? 'Forçando renovação' : 'Login'} em ${dashboardUrl}`);
 
-  // Step 1: Get login page for CSRF token
-  const loginPageRes = await fetch(`${dashboardUrl}/aaa/auth/login`, {
-    method: 'GET',
-    redirect: 'manual',
-  });
+  const loginPageRes = await fetch(`${dashboardUrl}/aaa/auth/login`, { method: 'GET', redirect: 'manual' });
   const loginPageHtml = await loginPageRes.text();
   const loginPageCookies = extractCookies(loginPageRes.headers);
 
@@ -39,9 +37,6 @@ async function getAuthenticatedCookies(dashboardUrl, username, password, forceRe
   else if (csrfInputMatch) csrfToken = csrfInputMatch[1];
   else if (csrfYiiMatch) csrfToken = csrfYiiMatch[1];
 
-  console.log('[session] CSRF token:', csrfToken ? 'sim' : 'não');
-
-  // Step 2: Submit login
   const formBody = new URLSearchParams();
   formBody.append('LoginForm[username]', username);
   formBody.append('LoginForm[password]', password);
@@ -51,93 +46,61 @@ async function getAuthenticatedCookies(dashboardUrl, username, password, forceRe
   }
 
   const cookieHeader = Object.entries(loginPageCookies).map(([k, v]) => `${k}=${v}`).join('; ');
-
   const loginRes = await fetch(`${dashboardUrl}/aaa/auth/login`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/x-www-form-urlencoded',
-      'Cookie': cookieHeader,
-      'Referer': `${dashboardUrl}/aaa/auth/login`,
-    },
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Cookie': cookieHeader, 'Referer': `${dashboardUrl}/aaa/auth/login` },
     body: formBody.toString(),
     redirect: 'manual',
   });
 
   const loginResponseCookies = extractCookies(loginRes.headers);
-  let allCookies = { ...loginPageCookies, ...loginResponseCookies };
+  let finalCookies = { ...loginPageCookies, ...loginResponseCookies };
 
-  console.log('[session] Login status:', loginRes.status);
-
-  // Step 3: Follow redirect
-  let finalCookies = allCookies;
   if (loginRes.status === 301 || loginRes.status === 302) {
     const redirectUrl = loginRes.headers.get('location');
     if (redirectUrl) {
-      const fullRedirectUrl = redirectUrl.startsWith('http') ? redirectUrl : `${dashboardUrl}${redirectUrl}`;
-      const redirectCookieHeader = Object.entries(finalCookies).map(([k, v]) => `${k}=${v}`).join('; ');
-      const redirectRes = await fetch(fullRedirectUrl, {
-        method: 'GET',
-        headers: { 'Cookie': redirectCookieHeader },
-        redirect: 'manual',
-      });
-      const redirectCookies = extractCookies(redirectRes.headers);
-      finalCookies = { ...finalCookies, ...redirectCookies };
+      const fullUrl = redirectUrl.startsWith('http') ? redirectUrl : `${dashboardUrl}${redirectUrl}`;
+      const rCookie = Object.entries(finalCookies).map(([k, v]) => `${k}=${v}`).join('; ');
+      const redirectRes = await fetch(fullUrl, { method: 'GET', headers: { 'Cookie': rCookie }, redirect: 'manual' });
+      finalCookies = { ...finalCookies, ...extractCookies(redirectRes.headers) };
       await redirectRes.text();
     }
   } else {
     await loginRes.text();
   }
 
-  // Step 4: Wait for session
   await new Promise(resolve => setTimeout(resolve, 1000));
-
-  // Cache the session
   sessionCache[cacheKey] = { cookies: finalCookies, timestamp: Date.now() };
-  console.log('[session] Sessão autenticada e salva no cache');
-
   return { cookies: finalCookies, fromCache: false };
 }
 
-// ==================== FETCH METRICS ====================
+// ==================== FETCH METRICS (with uptime persistence) ====================
 app.post('/api/fetch-metrics', async (req, res) => {
   try {
-    const { dashboardUrl, username, password } = req.body;
-
+    const { dashboardUrl, username, password, serverId } = req.body;
     if (!dashboardUrl || !username || !password) {
       return res.json({ success: false, error: 'dashboardUrl, username e password são obrigatórios' });
     }
 
-    // Get cookies (from cache or fresh login)
+    const sid = serverId || 'default';
     let { cookies: finalCookies, fromCache } = await getAuthenticatedCookies(dashboardUrl, username, password);
-
-    // Fetch metrics
     let metricsCookieHeader = Object.entries(finalCookies).map(([k, v]) => `${k}=${v}`).join('; ');
 
     let metricsRes = await fetch(`${dashboardUrl}/origin/channel/metrics`, {
       method: 'GET',
-      headers: {
-        'Cookie': metricsCookieHeader,
-        'Accept': 'application/json, text/html, */*',
-      },
+      headers: { 'Cookie': metricsCookieHeader, 'Accept': 'application/json, text/html, */*' },
     });
 
-    // If session expired (got 401/403), force re-login and retry
     if (fromCache && [401, 403].includes(metricsRes.status)) {
-      console.log('[fetch-metrics] Sessão em cache expirou, renovando...');
       const renewed = await getAuthenticatedCookies(dashboardUrl, username, password, true);
       metricsCookieHeader = Object.entries(renewed.cookies).map(([k, v]) => `${k}=${v}`).join('; ');
       metricsRes = await fetch(`${dashboardUrl}/origin/channel/metrics`, {
         method: 'GET',
-        headers: {
-          'Cookie': metricsCookieHeader,
-          'Accept': 'application/json, text/html, */*',
-        },
+        headers: { 'Cookie': metricsCookieHeader, 'Accept': 'application/json, text/html, */*' },
       });
     }
 
     const metricsText = await metricsRes.text();
-    console.log('[fetch-metrics] Metrics status:', metricsRes.status);
-
     if ([500, 403, 401].includes(metricsRes.status)) {
       return res.json({ success: false, error: `Sessão inválida (status ${metricsRes.status})` });
     }
@@ -152,7 +115,6 @@ app.post('/api/fetch-metrics', async (req, res) => {
       else rawItems = [metricsData];
 
       const activeItems = rawItems.filter(item => item.live === true);
-
       const radioNames = new Set([
         "Punk Rock","TOP Brasil","Sertanejo Raiz","Rádio Torres","Metal","TOP Internacional",
         "Forro","Rock Baladas","Barzinho","Vibe","Relax","Jazz","Rádio 104","Axe Anos 90",
@@ -163,22 +125,196 @@ app.post('/api/fetch-metrics', async (req, res) => {
         "Rádio Liberdade","POP Anos 80","Alma Sertaneja","Rádio Pampa","Rádio Evangelizar",
         "Flash Back","Reggae","ClipStation Rádio","Allteen","Hip Hop","Rádio Imbé","Rádio Caiçara",
       ]);
-
       const tvChannels = activeItems.filter(item => !radioNames.has(item.name));
-      console.log(`[fetch-metrics] ${rawItems.length} total, ${activeItems.length} live, ${tvChannels.length} TV`);
-
       channels = tvChannels.map((item, idx) => parseChannel(item, idx));
     } catch {
-      console.log('[fetch-metrics] Parsing HTML fallback');
       channels = parseHtmlMetrics(metricsText);
     }
 
-    console.log(`[fetch-metrics] ${channels.length} canais retornados`);
-    res.json({ success: true, channels, rawLength: metricsText.length });
+    // Persist status transitions & outage events
+    const now = new Date().toISOString();
+    const upsertStatus = db.prepare(`
+      INSERT INTO channel_status (channel_id, server_id, status, online_since, offline_since, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(channel_id, server_id) DO UPDATE SET
+        status = excluded.status,
+        online_since = CASE 
+          WHEN excluded.status = 'online' AND channel_status.status != 'online' THEN excluded.online_since
+          WHEN excluded.status = 'online' THEN channel_status.online_since
+          ELSE NULL
+        END,
+        offline_since = CASE
+          WHEN excluded.status != 'online' AND channel_status.status = 'online' THEN excluded.offline_since
+          WHEN excluded.status != 'online' THEN channel_status.offline_since
+          ELSE NULL
+        END,
+        updated_at = excluded.updated_at
+    `);
+
+    const openOutage = db.prepare(`
+      INSERT INTO channel_outage_events (channel_id, channel_name, server_id, started_at)
+      SELECT ?, ?, ?, ?
+      WHERE NOT EXISTS (
+        SELECT 1 FROM channel_outage_events 
+        WHERE channel_id = ? AND server_id = ? AND ended_at IS NULL
+      )
+    `);
+
+    const closeOutage = db.prepare(`
+      UPDATE channel_outage_events 
+      SET ended_at = ?, duration_seconds = CAST((julianday(?) - julianday(started_at)) * 86400 AS INTEGER)
+      WHERE channel_id = ? AND server_id = ? AND ended_at IS NULL
+    `);
+
+    const getStatus = db.prepare('SELECT * FROM channel_status WHERE channel_id = ? AND server_id = ?');
+
+    const transaction = db.transaction((channelsList) => {
+      for (const ch of channelsList) {
+        const prev = getStatus.get(ch.id, sid);
+        const isOnline = ch.status === 'online';
+
+        if (prev) {
+          // Transition: online -> offline
+          if (prev.status === 'online' && !isOnline) {
+            openOutage.run(ch.id, ch.name, sid, now, ch.id, sid);
+          }
+          // Transition: offline -> online
+          if (prev.status !== 'online' && isOnline) {
+            closeOutage.run(now, now, ch.id, sid);
+          }
+        } else if (!isOnline) {
+          // First time seeing channel and it's offline
+          openOutage.run(ch.id, ch.name, sid, now, ch.id, sid);
+        }
+
+        upsertStatus.run(
+          ch.id, sid, ch.status,
+          isOnline ? now : null,
+          !isOnline ? now : null,
+          now
+        );
+      }
+    });
+
+    transaction(channels);
+
+    // Enrich channels with persisted online_since
+    const allStatuses = db.prepare('SELECT * FROM channel_status WHERE server_id = ?').all(sid);
+    const statusMap = new Map(allStatuses.map(s => [s.channel_id, s]));
+
+    const enrichedChannels = channels.map(ch => {
+      const persisted = statusMap.get(ch.id);
+      return {
+        ...ch,
+        onlineSince: persisted?.online_since || null,
+        offlineSince: persisted?.offline_since || null,
+      };
+    });
+
+    res.json({ success: true, channels: enrichedChannels, rawLength: metricsText.length });
   } catch (error) {
     console.error('[fetch-metrics] Erro:', error);
     res.json({ success: false, error: error.message || 'Erro desconhecido' });
   }
+});
+
+// ==================== SERVERS CRUD ====================
+app.get('/api/servers', (req, res) => {
+  const servers = db.prepare('SELECT * FROM servers ORDER BY created_at').all();
+  res.json({ success: true, servers });
+});
+
+app.post('/api/servers', (req, res) => {
+  const { id, name, base_url, username, password, type } = req.body;
+  if (!name || !base_url) return res.status(400).json({ success: false, error: 'name e base_url obrigatórios' });
+  const serverId = id || `srv_${Date.now()}`;
+  db.prepare('INSERT INTO servers (id, name, base_url, username, password, type) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(serverId, name, base_url, username || 'admin', password || '', type || 'flussonic');
+  res.json({ success: true, id: serverId });
+});
+
+app.put('/api/servers/:id', (req, res) => {
+  const { name, base_url, username, password, type, status } = req.body;
+  db.prepare('UPDATE servers SET name=COALESCE(?,name), base_url=COALESCE(?,base_url), username=COALESCE(?,username), password=COALESCE(?,password), type=COALESCE(?,type), status=COALESCE(?,status) WHERE id=?')
+    .run(name, base_url, username, password, type, status, req.params.id);
+  res.json({ success: true });
+});
+
+app.delete('/api/servers/:id', (req, res) => {
+  if (req.params.id === 'default') return res.status(400).json({ success: false, error: 'Não pode deletar servidor padrão' });
+  db.prepare('DELETE FROM servers WHERE id = ?').run(req.params.id);
+  res.json({ success: true });
+});
+
+// ==================== OUTAGE EVENTS / REPORTS ====================
+app.get('/api/outages', (req, res) => {
+  const { start, end, server_id, channel_id, limit } = req.query;
+  let sql = 'SELECT * FROM channel_outage_events WHERE 1=1';
+  const params = [];
+
+  if (start) { sql += ' AND started_at >= ?'; params.push(start); }
+  if (end) { sql += ' AND (started_at <= ? OR started_at IS NULL)'; params.push(end); }
+  if (server_id) { sql += ' AND server_id = ?'; params.push(server_id); }
+  if (channel_id) { sql += ' AND channel_id = ?'; params.push(channel_id); }
+
+  sql += ' ORDER BY started_at DESC';
+  if (limit) { sql += ' LIMIT ?'; params.push(parseInt(limit)); }
+
+  const outages = db.prepare(sql).all(...params);
+  
+  // Aggregations
+  const totalOutages = outages.length;
+  const totalOfflineSeconds = outages.reduce((sum, o) => sum + (o.duration_seconds || 0), 0);
+  const openOutages = outages.filter(o => !o.ended_at).length;
+
+  // Top channels by outage count
+  const countMap = {};
+  const durationMap = {};
+  for (const o of outages) {
+    const key = o.channel_name || o.channel_id;
+    countMap[key] = (countMap[key] || 0) + 1;
+    durationMap[key] = (durationMap[key] || 0) + (o.duration_seconds || 0);
+  }
+  const topByCount = Object.entries(countMap).sort((a, b) => b[1] - a[1]).slice(0, 10).map(([name, count]) => ({ name, count }));
+  const topByDuration = Object.entries(durationMap).sort((a, b) => b[1] - a[1]).slice(0, 10).map(([name, duration]) => ({ name, duration }));
+
+  res.json({
+    success: true,
+    outages,
+    stats: { totalOutages, totalOfflineSeconds, openOutages, topByCount, topByDuration },
+  });
+});
+
+// ==================== CHANNEL STATUS (persisted) ====================
+app.get('/api/channel-status', (req, res) => {
+  const { server_id } = req.query;
+  let statuses;
+  if (server_id) {
+    statuses = db.prepare('SELECT * FROM channel_status WHERE server_id = ?').all(server_id);
+  } else {
+    statuses = db.prepare('SELECT * FROM channel_status').all();
+  }
+  res.json({ success: true, statuses });
+});
+
+// ==================== MESSAGE TEMPLATES ====================
+app.get('/api/templates', (req, res) => {
+  const templates = db.prepare('SELECT * FROM message_templates ORDER BY scope').all();
+  res.json({ success: true, templates });
+});
+
+app.post('/api/templates', (req, res) => {
+  const { scope, scope_id, template } = req.body;
+  if (!template) return res.status(400).json({ success: false, error: 'template obrigatório' });
+  db.prepare(`INSERT INTO message_templates (scope, scope_id, template) VALUES (?, ?, ?)
+    ON CONFLICT(scope, scope_id) DO UPDATE SET template = excluded.template`)
+    .run(scope || 'global', scope_id || null, template);
+  res.json({ success: true });
+});
+
+app.delete('/api/templates/:id', (req, res) => {
+  db.prepare('DELETE FROM message_templates WHERE id = ?').run(req.params.id);
+  res.json({ success: true });
 });
 
 // ==================== SEND TELEGRAM ====================
@@ -188,25 +324,16 @@ app.post('/api/send-telegram', async (req, res) => {
     if (!botToken || !chatId || !message) {
       return res.status(400).json({ success: false, error: 'botToken, chatId e message são obrigatórios' });
     }
-
-    console.log('[send-telegram] Enviando para chat:', chatId);
     const response = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ chat_id: chatId, text: message, parse_mode: 'Markdown' }),
     });
     const data = await response.json();
-
-    if (!response.ok) {
-      console.error('[send-telegram] Erro:', data);
-      return res.json({ success: false, error: data.description || 'Erro ao enviar' });
-    }
-
-    console.log('[send-telegram] Enviado com sucesso');
+    if (!response.ok) return res.json({ success: false, error: data.description || 'Erro ao enviar' });
     res.json({ success: true });
   } catch (error) {
-    console.error('[send-telegram] Erro:', error);
-    res.json({ success: false, error: error.message || 'Erro desconhecido' });
+    res.json({ success: false, error: error.message });
   }
 });
 
@@ -217,22 +344,59 @@ app.post('/api/send-whatsapp', async (req, res) => {
     if (!phone || !apiKey || !message) {
       return res.status(400).json({ success: false, error: 'phone, apiKey e message são obrigatórios' });
     }
-
     const encodedMessage = encodeURIComponent(message);
-    const url = `https://api.callmebot.com/whatsapp.php?phone=${phone}&text=${encodedMessage}&apikey=${apiKey}`;
-
-    console.log(`[send-whatsapp] Enviando para ${phone.substring(0, 6)}...`);
+    const url = `https://api.callmebot.com/whatsapp.php?phone=${encodeURIComponent(phone)}&text=${encodedMessage}&apikey=${encodeURIComponent(apiKey)}`;
     const r = await fetch(url);
     const text = await r.text();
-    console.log(`[send-whatsapp] Status: ${r.status}`);
-
-    if (!r.ok) {
-      return res.json({ success: false, error: `CallMeBot retornou status ${r.status}: ${text}` });
-    }
+    if (!r.ok) return res.json({ success: false, error: `CallMeBot status ${r.status}: ${text}` });
     res.json({ success: true });
   } catch (error) {
-    console.error('[send-whatsapp] Erro:', error);
-    res.json({ success: false, error: error.message || 'Erro desconhecido' });
+    res.json({ success: false, error: error.message });
+  }
+});
+
+// ==================== FETCH ALL SERVERS (polling helper) ====================
+app.post('/api/fetch-all-servers', async (req, res) => {
+  try {
+    const servers = db.prepare("SELECT * FROM servers WHERE status = 'active'").all();
+    const results = [];
+
+    for (const server of servers) {
+      try {
+        // Re-use the fetch-metrics logic internally
+        const internalRes = await new Promise((resolve) => {
+          const mockReq = {
+            body: {
+              dashboardUrl: server.base_url,
+              username: server.username,
+              password: server.password,
+              serverId: server.id,
+            }
+          };
+          const mockRes = {
+            json: (data) => resolve(data),
+            status: () => ({ json: (data) => resolve(data) }),
+          };
+          app._router.handle(
+            Object.assign(new (require('http').IncomingMessage)(), {
+              method: 'POST',
+              url: '/api/fetch-metrics',
+              headers: { 'content-type': 'application/json' },
+              body: mockReq.body,
+            }),
+            mockRes,
+            () => resolve({ success: false, error: 'Route not found' })
+          );
+        });
+        results.push({ serverId: server.id, serverName: server.name, ...internalRes });
+      } catch (err) {
+        results.push({ serverId: server.id, serverName: server.name, success: false, error: err.message });
+      }
+    }
+
+    res.json({ success: true, results });
+  } catch (error) {
+    res.json({ success: false, error: error.message });
   }
 });
 
@@ -244,27 +408,20 @@ function extractCookies(headers) {
     raw.forEach(cookie => {
       const parts = cookie.split(';')[0];
       const eqIdx = parts.indexOf('=');
-      if (eqIdx > 0) {
-        cookies[parts.substring(0, eqIdx).trim()] = parts.substring(eqIdx + 1).trim();
-      }
+      if (eqIdx > 0) cookies[parts.substring(0, eqIdx).trim()] = parts.substring(eqIdx + 1).trim();
     });
   } else if (typeof raw === 'string') {
     raw.split(/,(?=\s*\w+=)/).forEach(cookie => {
       const parts = cookie.trim().split(';')[0];
       const eqIdx = parts.indexOf('=');
-      if (eqIdx > 0) {
-        cookies[parts.substring(0, eqIdx).trim()] = parts.substring(eqIdx + 1).trim();
-      }
+      if (eqIdx > 0) cookies[parts.substring(0, eqIdx).trim()] = parts.substring(eqIdx + 1).trim();
     });
   }
-  // Fallback: use headers.getSetCookie if available (Node 20+)
   if (Object.keys(cookies).length === 0 && headers.getSetCookie) {
     headers.getSetCookie().forEach(cookie => {
       const parts = cookie.split(';')[0];
       const eqIdx = parts.indexOf('=');
-      if (eqIdx > 0) {
-        cookies[parts.substring(0, eqIdx).trim()] = parts.substring(eqIdx + 1).trim();
-      }
+      if (eqIdx > 0) cookies[parts.substring(0, eqIdx).trim()] = parts.substring(eqIdx + 1).trim();
     });
   }
   return cookies;
@@ -343,5 +500,6 @@ function inferStatus(cells) {
 
 // ==================== START ====================
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`✅ Signal Monitor API rodando na porta ${PORT}`);
+  console.log(`✅ Signal Monitor API v2.0 rodando na porta ${PORT}`);
+  console.log(`📦 SQLite DB: ${require('path').join(__dirname, 'signal-monitor.db')}`);
 });

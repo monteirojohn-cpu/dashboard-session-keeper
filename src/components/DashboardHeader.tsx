@@ -1,5 +1,6 @@
-import { Activity, Radio, Settings, RefreshCw, Bell } from "lucide-react";
+import { Activity, Radio, Settings, RefreshCw, Server, BarChart3 } from "lucide-react";
 import { Button } from "./ui/button";
+import { Link } from "react-router-dom";
 
 interface DashboardHeaderProps {
   totalChannels: number;
@@ -51,6 +52,16 @@ export const DashboardHeader = ({
           </div>
 
           <div className="flex items-center gap-2">
+            <Link to="/servers">
+              <Button variant="outline" size="icon" className="h-8 w-8" title="Servidores">
+                <Server className="h-4 w-4" />
+              </Button>
+            </Link>
+            <Link to="/reports">
+              <Button variant="outline" size="icon" className="h-8 w-8" title="Relatórios">
+                <BarChart3 className="h-4 w-4" />
+              </Button>
+            </Link>
             <Button
               variant="outline"
               size="icon"
