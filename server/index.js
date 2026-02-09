@@ -24,12 +24,17 @@ app.post('/api/fetch-metrics', async (req, res) => {
     // Resolve server ID: use explicit serverId, or look up by base_url, or fallback to 'default'
     let sid = serverId || null;
     if (!sid) {
-      const serverByUrl = db.prepare('SELECT id FROM servers WHERE base_url = ?').get(dashboardUrl);
-      sid = serverByUrl ? serverByUrl.id : 'default';
+      // Try exact match first, then partial match (ignore trailing slash)
+      const normalizedUrl = dashboardUrl.replace(/\/+$/, '');
+      const allServers = db.prepare('SELECT id, base_url FROM servers').all();
+      const match = allServers.find(s => s.base_url.replace(/\/+$/, '') === normalizedUrl);
+      sid = match ? match.id : 'default';
+      console.log(`[fetch-metrics] URL="${dashboardUrl}" → server_id="${sid}" (matched: ${!!match})`);
     }
 
     const server = { base_url: dashboardUrl, username, password };
     const channels = await fetchChannelsFromServer(server);
+    console.log(`[fetch-metrics] Fetched ${channels.length} live channels from server`);
 
     // Filter by monitored_channels if any selection exists for this server
     const monitoredRows = db.prepare('SELECT * FROM monitored_channels WHERE server_id = ?').all(sid);
@@ -37,6 +42,20 @@ app.post('/api/fetch-metrics', async (req, res) => {
     if (monitoredRows.length > 0) {
       const enabledIds = new Set(monitoredRows.filter(r => r.enabled).map(r => r.channel_id));
       filteredChannels = channels.filter(ch => enabledIds.has(ch.id));
+      console.log(`[fetch-metrics] Monitored: ${monitoredRows.length} total, ${enabledIds.size} enabled, ${filteredChannels.length} after filter`);
+      
+      // Safety: if filter removes ALL channels but there were live channels, skip filter (likely ID mismatch)
+      if (filteredChannels.length === 0 && channels.length > 0) {
+        console.warn(`[fetch-metrics] WARNING: Filter removed ALL channels! Likely ID mismatch. Returning all channels unfiltered.`);
+        // Log some IDs for debugging
+        const sampleLive = channels.slice(0, 3).map(c => c.id);
+        const sampleDb = [...enabledIds].slice(0, 3);
+        console.warn(`[fetch-metrics] Sample live IDs: ${JSON.stringify(sampleLive)}`);
+        console.warn(`[fetch-metrics] Sample DB IDs: ${JSON.stringify(sampleDb)}`);
+        filteredChannels = channels;
+      }
+    } else {
+      console.log(`[fetch-metrics] No monitored_channels for server_id="${sid}", showing all`);
     }
 
     // Enrich channels with persisted status data
