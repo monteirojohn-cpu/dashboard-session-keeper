@@ -232,6 +232,47 @@ app.delete('/api/templates/:id', (req, res) => {
   res.json({ success: true });
 });
 
+// ==================== TEST NOTIFICATION ====================
+app.post('/api/test-notification', async (req, res) => {
+  try {
+    const db = getDb();
+    const destinations = db.prepare('SELECT * FROM notification_destinations').all();
+    if (destinations.length === 0) {
+      return res.json({ success: false, error: 'Nenhum destino de notificação configurado' });
+    }
+
+    const message = '🔔 *TESTE - Signal Monitor*\n\nEsta é uma mensagem de teste.\nSe você recebeu, as notificações estão funcionando corretamente! ✅';
+    const results = [];
+
+    for (const dest of destinations) {
+      const config = JSON.parse(dest.config);
+      try {
+        if (dest.type === 'telegram') {
+          const r = await fetch(`https://api.telegram.org/bot${config.botToken}/sendMessage`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ chat_id: config.chatId, text: message, parse_mode: 'Markdown' }),
+          });
+          const data = await r.json();
+          results.push({ type: 'telegram', id: dest.id, success: r.ok, error: r.ok ? null : data.description });
+        } else if (dest.type === 'whatsapp') {
+          const encoded = encodeURIComponent(message);
+          const url = `https://api.callmebot.com/whatsapp.php?phone=${encodeURIComponent(config.phone)}&text=${encoded}&apikey=${encodeURIComponent(config.apiKey)}`;
+          const r = await fetch(url);
+          results.push({ type: 'whatsapp', id: dest.id, success: r.ok, error: r.ok ? null : `Status ${r.status}` });
+        }
+      } catch (err) {
+        results.push({ type: dest.type, id: dest.id, success: false, error: err.message });
+      }
+    }
+
+    const allOk = results.every(r => r.success);
+    res.json({ success: allOk, results });
+  } catch (error) {
+    res.json({ success: false, error: error.message });
+  }
+});
+
 // ==================== SEND TELEGRAM ====================
 app.post('/api/send-telegram', async (req, res) => {
   try {

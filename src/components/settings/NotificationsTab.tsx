@@ -3,8 +3,10 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
-import { Plus, X } from "lucide-react";
+import { Plus, X, Send, Loader2 } from "lucide-react";
 import { toast } from "sonner";
+
+const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3001";
 
 export interface TelegramDest {
   botToken: string;
@@ -59,11 +61,43 @@ export const NotificationsTab = ({
     setWhatsappDestinations(updated);
   };
 
+  const [isSendingTest, setIsSendingTest] = useState(false);
+
+  const handleTestNotification = async () => {
+    setIsSendingTest(true);
+    try {
+      const response = await fetch(`${API_URL}/api/test-notification`, { method: "POST" });
+      const data = await response.json();
+      if (data.success) {
+        toast.success("Notificação de teste enviada com sucesso!");
+      } else {
+        const errors = data.results?.filter((r: any) => !r.success).map((r: any) => `${r.type}: ${r.error}`).join(", ");
+        toast.error(errors || data.error || "Erro ao enviar teste");
+      }
+    } catch (err: any) {
+      toast.error("Erro de conexão: " + err.message);
+    } finally {
+      setIsSendingTest(false);
+    }
+  };
+
   return (
     <div className="space-y-4 overflow-y-auto max-h-[55vh] pr-1">
       <div className="flex items-center justify-between">
         <Label className="text-xs text-muted-foreground font-mono">Notificações ativas</Label>
-        <Switch checked={notificationsEnabled} onCheckedChange={setNotificationsEnabled} />
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleTestNotification}
+            disabled={isSendingTest}
+            className="h-7 text-xs font-mono gap-1"
+          >
+            {isSendingTest ? <Loader2 className="h-3 w-3 animate-spin" /> : <Send className="h-3 w-3" />}
+            Enviar teste
+          </Button>
+          <Switch checked={notificationsEnabled} onCheckedChange={setNotificationsEnabled} />
+        </div>
       </div>
 
       {/* Telegram Section */}
