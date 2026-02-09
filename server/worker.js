@@ -11,7 +11,7 @@ const { getDb } = require('./db');
 const { fetchChannelsFromServer } = require('./metrics');
 
 const POLL_INTERVAL_MS = 30_000; // 30 seconds
-const FAIL_THRESHOLD = 3;
+const FAIL_THRESHOLD = 7;
 
 let running = false;
 
@@ -125,7 +125,7 @@ function processChannels(db, channels, server, now) {
   const transaction = db.transaction((channelsList) => {
     for (const ch of channelsList) {
       const prev = getStatus.get(ch.id, sid);
-      const isOnline = ch.status === 'online';
+      const isFail = ch.status === 'offline' || ch.status === 'degraded';
 
       let failCount = prev ? prev.fail_count : 0;
       let isDown = prev ? prev.is_down : 0;
@@ -133,10 +133,12 @@ function processChannels(db, channels, server, now) {
       let onlineSince = prev ? prev.online_since : null;
       let offlineSince = prev ? prev.offline_since : null;
 
-      if (isOnline) {
+      if (!isFail) {
+        // Channel is online — check recovery
         if (isDown) {
           closeOutage.run(now, now, ch.id, sid);
           const durSec = downSince ? Math.round((Date.now() - new Date(downSince).getTime()) / 1000) : 0;
+          console.log(`[rule] channel="${ch.name}" id=${ch.id} server="${server.name}" status=ONLINE is_down=1 => RECOVERED => notifying UP`);
           upEvents.push({ channel_name: ch.name, channel_id: ch.id, server_name: server.name, downtime_seconds: durSec, down_at: downSince });
         } else if (failCount > 0) {
           console.log(`[rule] channel="${ch.name}" id=${ch.id} server="${server.name}" status=ONLINE fail_count=${failCount} => RESET (back before threshold)`);
@@ -149,8 +151,9 @@ function processChannels(db, channels, server, now) {
         }
         offlineSince = null;
       } else {
+        // Channel is failing (offline or degraded)
         failCount += 1;
-        console.log(`[rule] channel="${ch.name}" id=${ch.id} server="${server.name}" status=${ch.status.toUpperCase()} fail_count=${failCount} is_down=${isDown}`);
+        console.log(`[rule] channel="${ch.name}" id=${ch.id} server="${server.name}" status=${ch.status.toUpperCase()} isFail=true fail_count=${failCount} is_down=${isDown}`);
 
         if (!isDown && failCount >= FAIL_THRESHOLD) {
           isDown = 1;
@@ -194,7 +197,7 @@ async function sendBatchNotifications(downEvents, upEvents) {
 
   if (downEvents.length > 0) {
     const lines = downEvents.map((e, i) => `${i + 1}) 📡 ${e.channel_name} — 🖥️ ${e.server_name} — 🕐 ${toBRTime(e.down_at)}`).join('\n');
-    messages.push(`🚨 *SIGNAL MONITOR — ${downEvents.length} ${downEvents.length === 1 ? 'CANAL CAIU' : 'CANAIS CAÍRAM'}*\n\n📅 ${data} 🕐 ${hora}\n\n${lines}\n\n⚠️ Queda confirmada após 3 verificações consecutivas.`);
+    messages.push(`🚨 *SIGNAL MONITOR — ${downEvents.length} ${downEvents.length === 1 ? 'CANAL CAIU' : 'CANAIS CAÍRAM'}*\n\n📅 ${data} 🕐 ${hora}\n\n${lines}\n\n⚠️ Queda confirmada após 3 minutos e 30 segundos de indisponibilidade contínua.`);
   }
 
   if (upEvents.length > 0) {
@@ -232,7 +235,7 @@ async function sendBatchNotifications(downEvents, upEvents) {
 }
 
 function startWorker() {
-  console.log(`[worker] Monitoring started – interval=${POLL_INTERVAL_MS / 1000}s threshold=${FAIL_THRESHOLD}x`);
+  console.log(`[worker] Monitoring started – interval=${POLL_INTERVAL_MS / 1000}s threshold=${FAIL_THRESHOLD}x (~${Math.round(FAIL_THRESHOLD * POLL_INTERVAL_MS / 1000 / 60)}m${(FAIL_THRESHOLD * POLL_INTERVAL_MS / 1000) % 60}s)`);
   // Run immediately on startup
   pollAllServers();
   // Then every 30s
