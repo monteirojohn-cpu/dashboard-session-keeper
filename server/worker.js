@@ -17,6 +17,16 @@ let running = false;
 
 const normalizeId = (id) => String(id).replace(/\.0$/, '');
 
+function toBRTime(date) {
+  const d = date instanceof Date ? date : new Date(date || Date.now());
+  return d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit', timeZone: 'America/Sao_Paulo' });
+}
+
+function toBRDate(date) {
+  const d = date instanceof Date ? date : new Date(date || Date.now());
+  return d.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+}
+
 async function pollAllServers() {
   if (running) return; // guard against overlap
   running = true;
@@ -127,8 +137,7 @@ function processChannels(db, channels, server, now) {
         if (isDown) {
           closeOutage.run(now, now, ch.id, sid);
           const durSec = downSince ? Math.round((Date.now() - new Date(downSince).getTime()) / 1000) : 0;
-          console.log(`[rule] channel="${ch.name}" id=${ch.id} server="${server.name}" status=ONLINE is_down=1 => RECOVERED => notifying UP`);
-          upEvents.push({ channel_name: ch.name, channel_id: ch.id, server_name: server.name, downtime_seconds: durSec });
+          upEvents.push({ channel_name: ch.name, channel_id: ch.id, server_name: server.name, downtime_seconds: durSec, down_at: downSince });
         } else if (failCount > 0) {
           console.log(`[rule] channel="${ch.name}" id=${ch.id} server="${server.name}" status=ONLINE fail_count=${failCount} => RESET (back before threshold)`);
         }
@@ -148,7 +157,7 @@ function processChannels(db, channels, server, now) {
           downSince = now;
           openOutage.run(ch.id, ch.name, sid, now);
           console.log(`[rule] channel="${ch.name}" id=${ch.id} FAIL_THRESHOLD reached (${FAIL_THRESHOLD}) => CONFIRMED_DOWN => notifying DOWN`);
-          downEvents.push({ channel_name: ch.name, channel_id: ch.id, server_name: server.name });
+          downEvents.push({ channel_name: ch.name, channel_id: ch.id, server_name: server.name, down_at: now });
         }
 
         if (!prev || prev.status === 'online') {
@@ -178,19 +187,19 @@ function formatDuration(seconds) {
 
 async function sendBatchNotifications(downEvents, upEvents) {
   const db = getDb();
-  const hora = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit', timeZone: 'America/Sao_Paulo' });
-  const data = new Date().toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+  const hora = toBRTime();
+  const data = toBRDate();
 
   const messages = [];
 
   if (downEvents.length > 0) {
-    const lines = downEvents.map((e, i) => `${i + 1}) 📡 ${e.channel_name} — 🖥️ ${e.server_name}`).join('\n');
-    messages.push(`🚨 *SIGNAL MONITOR — ${downEvents.length} ${downEvents.length === 1 ? 'CANAL CAIU' : 'CANAIS CAÍRAM'}*\n\n🕐 ${data} ${hora}\n\n${lines}\n\n⚠️ Queda confirmada após 3 verificações consecutivas.`);
+    const lines = downEvents.map((e, i) => `${i + 1}) 📡 ${e.channel_name} — 🖥️ ${e.server_name} — 🕐 ${toBRTime(e.down_at)}`).join('\n');
+    messages.push(`🚨 *SIGNAL MONITOR — ${downEvents.length} ${downEvents.length === 1 ? 'CANAL CAIU' : 'CANAIS CAÍRAM'}*\n\n📅 ${data} 🕐 ${hora}\n\n${lines}\n\n⚠️ Queda confirmada após 3 verificações consecutivas.`);
   }
 
   if (upEvents.length > 0) {
-    const lines = upEvents.map((e, i) => `${i + 1}) 📡 ${e.channel_name} — 🖥️ ${e.server_name} — ⏱️ ${formatDuration(e.downtime_seconds)}`).join('\n');
-    messages.push(`✅ *SIGNAL MONITOR — ${upEvents.length} ${upEvents.length === 1 ? 'CANAL VOLTOU' : 'CANAIS VOLTARAM'}*\n\n🕐 ${data} ${hora}\n\n${lines}`);
+    const lines = upEvents.map((e, i) => `${i + 1}) 📡 ${e.channel_name} — 🖥️ ${e.server_name} — ⏱️ ${formatDuration(e.downtime_seconds)} — 🕐 caiu ${toBRTime(e.down_at)}`).join('\n');
+    messages.push(`✅ *SIGNAL MONITOR — ${upEvents.length} ${upEvents.length === 1 ? 'CANAL VOLTOU' : 'CANAIS VOLTARAM'}*\n\n📅 ${data} 🕐 ${hora}\n\n${lines}`);
   }
 
   const destinations = db.prepare('SELECT * FROM notification_destinations').all();
