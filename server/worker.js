@@ -3,6 +3,7 @@
  * Implements 3-strike anti-false-positive rule:
  *   - Channel only marked as DOWN after 3 consecutive offline checks
  *   - Notification sent ONCE per outage event
+ *   - Recovery notification when channel comes back online after confirmed down
  *   - State persisted in SQLite (survives restarts)
  */
 
@@ -13,6 +14,8 @@ const POLL_INTERVAL_MS = 30_000; // 30 seconds
 const FAIL_THRESHOLD = 3;
 
 let running = false;
+
+const normalizeId = (id) => String(id).replace(/\.0$/, '');
 
 async function pollAllServers() {
   if (running) return; // guard against overlap
@@ -27,33 +30,33 @@ async function pollAllServers() {
     for (const server of servers) {
       try {
         const channels = await fetchChannelsFromServer(server);
-        
+        console.log(`[worker] server="${server.name}" fetched ${channels.length} live channels`);
+
         // Filter by monitored_channels if any selection exists for this server
         const monitoredRows = db.prepare('SELECT * FROM monitored_channels WHERE server_id = ?').all(server.id);
         let filteredChannels = channels;
         if (monitoredRows.length > 0) {
-          const enabledIds = new Set(monitoredRows.filter(r => r.enabled).map(r => r.channel_id));
-          filteredChannels = channels.filter(ch => enabledIds.has(ch.id));
+          const disabledIds = new Set(monitoredRows.filter(r => !r.enabled).map(r => normalizeId(r.channel_id)));
+          filteredChannels = channels.filter(ch => !disabledIds.has(normalizeId(ch.id)));
+          console.log(`[worker] server="${server.name}" monitored filter: ${channels.length} -> ${filteredChannels.length} (${disabledIds.size} disabled)`);
         }
-        
-        // Also upsert all discovered channels into monitored_channels (for UI listing)
+
+        // Auto-discover new channels into monitored_channels
         const upsertDiscovered = db.prepare(`
           INSERT INTO monitored_channels (server_id, channel_id, channel_name, enabled, updated_at)
           VALUES (?, ?, ?, 1, ?)
           ON CONFLICT(server_id, channel_id) DO UPDATE SET channel_name = excluded.channel_name, updated_at = excluded.updated_at
         `);
-        const now2 = new Date().toISOString();
         const txDiscover = db.transaction(() => {
           for (const ch of channels) {
-            // Only auto-insert if no record exists yet
             const existing = db.prepare('SELECT 1 FROM monitored_channels WHERE server_id = ? AND channel_id = ?').get(server.id, ch.id);
             if (!existing) {
-              upsertDiscovered.run(server.id, ch.id, ch.name, now2);
+              upsertDiscovered.run(server.id, ch.id, ch.name, now);
             }
           }
         });
         txDiscover();
-        
+
         processChannels(db, filteredChannels, server, now);
       } catch (err) {
         console.error(`[worker] Erro ao verificar servidor ${server.name}:`, err.message);
@@ -71,9 +74,10 @@ function processChannels(db, channels, server, now) {
 
   const getStatus = db.prepare('SELECT * FROM channel_status WHERE channel_id = ? AND server_id = ?');
   const upsertStatus = db.prepare(`
-    INSERT INTO channel_status (channel_id, server_id, status, online_since, offline_since, fail_count, is_down, down_since, last_check_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO channel_status (channel_id, server_id, channel_name, status, online_since, offline_since, fail_count, is_down, down_since, last_check_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(channel_id, server_id) DO UPDATE SET
+      channel_name = excluded.channel_name,
       status = excluded.status,
       online_since = excluded.online_since,
       offline_since = excluded.offline_since,
@@ -111,9 +115,12 @@ function processChannels(db, channels, server, now) {
       if (isOnline) {
         // Channel is online
         if (isDown) {
-          // Was down → close outage event, notify recovery
+          // Was confirmed down → close outage event, notify recovery
           closeOutage.run(now, now, ch.id, sid);
+          console.log(`[rule] channel="${ch.name}" id=${ch.id} server="${server.name}" status=ONLINE is_down=1 => RECOVERED => notifying UP`);
           notifications.push({ type: 'recovery', channel: ch, server, downSince });
+        } else if (failCount > 0) {
+          console.log(`[rule] channel="${ch.name}" id=${ch.id} server="${server.name}" status=ONLINE fail_count=${failCount} => RESET (back before threshold)`);
         }
         failCount = 0;
         isDown = 0;
@@ -126,12 +133,14 @@ function processChannels(db, channels, server, now) {
       } else {
         // Channel is offline/degraded
         failCount += 1;
+        console.log(`[rule] channel="${ch.name}" id=${ch.id} server="${server.name}" status=${ch.status.toUpperCase()} fail_count=${failCount} is_down=${isDown}`);
 
         if (!isDown && failCount >= FAIL_THRESHOLD) {
           // Confirmed down after 3 consecutive failures
           isDown = 1;
           downSince = now;
           openOutage.run(ch.id, ch.name, sid, now);
+          console.log(`[rule] channel="${ch.name}" id=${ch.id} FAIL_THRESHOLD reached (${FAIL_THRESHOLD}) => CONFIRMED_DOWN => notifying DOWN`);
           notifications.push({ type: 'down', channel: ch, server, downSince: now });
         }
 
@@ -143,7 +152,7 @@ function processChannels(db, channels, server, now) {
       }
 
       upsertStatus.run(
-        ch.id, sid, ch.status,
+        ch.id, sid, ch.name, ch.status,
         onlineSince, offlineSince,
         failCount, isDown, downSince,
         now, now
@@ -182,26 +191,27 @@ async function sendNotification({ type, channel, server, downSince }) {
     try {
       const config = JSON.parse(dest.config);
       if (dest.type === 'telegram' && config.botToken && config.chatId) {
-        await fetch(`https://api.telegram.org/bot${config.botToken}/sendMessage`, {
+        const r = await fetch(`https://api.telegram.org/bot${config.botToken}/sendMessage`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ chat_id: config.chatId, text: message, parse_mode: 'Markdown' }),
         });
-        console.log(`[worker] Telegram enviado para ${config.chatId}`);
+        const result = await r.json();
+        console.log(`[notify] telegram type=${type.toUpperCase()} channel="${channel.name}" chatId=${config.chatId} success=${r.ok} ${r.ok ? '' : 'error=' + (result.description || '')}`);
       } else if (dest.type === 'whatsapp' && config.phone && config.apiKey) {
         const encodedMessage = encodeURIComponent(message);
         const url = `https://api.callmebot.com/whatsapp.php?phone=${encodeURIComponent(config.phone)}&text=${encodedMessage}&apikey=${encodeURIComponent(config.apiKey)}`;
-        await fetch(url);
-        console.log(`[worker] WhatsApp enviado para ${config.phone}`);
+        const r = await fetch(url);
+        console.log(`[notify] whatsapp type=${type.toUpperCase()} channel="${channel.name}" phone=${config.phone} success=${r.ok}`);
       }
     } catch (err) {
-      console.error(`[worker] Erro envio ${dest.type}:`, err.message);
+      console.error(`[notify] ${dest.type} type=${type.toUpperCase()} channel="${channel.name}" error=${err.message}`);
     }
   }
 }
 
 function startWorker() {
-  console.log(`🔄 Worker iniciado — polling a cada ${POLL_INTERVAL_MS / 1000}s com regra ${FAIL_THRESHOLD}x falhas`);
+  console.log(`[worker] Monitoring started – interval=${POLL_INTERVAL_MS / 1000}s threshold=${FAIL_THRESHOLD}x`);
   // Run immediately on startup
   pollAllServers();
   // Then every 30s
