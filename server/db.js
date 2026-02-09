@@ -124,6 +124,30 @@ function migrateSchema() {
   if (!cols.includes('channel_name')) {
     db.exec(`ALTER TABLE channel_status ADD COLUMN channel_name TEXT`);
   }
+
+  // Add maintenance columns to servers if they don't exist
+  const serverCols = db.prepare("PRAGMA table_info(servers)").all().map(c => c.name);
+  if (!serverCols.includes('maintenance_enabled')) {
+    db.exec(`ALTER TABLE servers ADD COLUMN maintenance_enabled INTEGER DEFAULT 0`);
+  }
+  if (!serverCols.includes('maintenance_start')) {
+    db.exec(`ALTER TABLE servers ADD COLUMN maintenance_start TEXT`);
+  }
+  if (!serverCols.includes('maintenance_end')) {
+    db.exec(`ALTER TABLE servers ADD COLUMN maintenance_end TEXT`);
+  }
+  if (!serverCols.includes('maintenance_days')) {
+    db.exec(`ALTER TABLE servers ADD COLUMN maintenance_days TEXT`);
+  }
+  if (!serverCols.includes('maintenance_silence_down')) {
+    db.exec(`ALTER TABLE servers ADD COLUMN maintenance_silence_down INTEGER DEFAULT 1`);
+  }
+  if (!serverCols.includes('maintenance_silence_up')) {
+    db.exec(`ALTER TABLE servers ADD COLUMN maintenance_silence_up INTEGER DEFAULT 0`);
+  }
+  if (!serverCols.includes('maintenance_tz')) {
+    db.exec(`ALTER TABLE servers ADD COLUMN maintenance_tz TEXT DEFAULT 'America/Sao_Paulo'`);
+  }
 }
 
 module.exports = { getDb };
