@@ -27,7 +27,34 @@ async function pollAllServers() {
     for (const server of servers) {
       try {
         const channels = await fetchChannelsFromServer(server);
-        processChannels(db, channels, server, now);
+        
+        // Filter by monitored_channels if any selection exists for this server
+        const monitoredRows = db.prepare('SELECT * FROM monitored_channels WHERE server_id = ?').all(server.id);
+        let filteredChannels = channels;
+        if (monitoredRows.length > 0) {
+          const enabledIds = new Set(monitoredRows.filter(r => r.enabled).map(r => r.channel_id));
+          filteredChannels = channels.filter(ch => enabledIds.has(ch.id));
+        }
+        
+        // Also upsert all discovered channels into monitored_channels (for UI listing)
+        const upsertDiscovered = db.prepare(`
+          INSERT INTO monitored_channels (server_id, channel_id, channel_name, enabled, updated_at)
+          VALUES (?, ?, ?, 1, ?)
+          ON CONFLICT(server_id, channel_id) DO UPDATE SET channel_name = excluded.channel_name, updated_at = excluded.updated_at
+        `);
+        const now2 = new Date().toISOString();
+        const txDiscover = db.transaction(() => {
+          for (const ch of channels) {
+            // Only auto-insert if no record exists yet
+            const existing = db.prepare('SELECT 1 FROM monitored_channels WHERE server_id = ? AND channel_id = ?').get(server.id, ch.id);
+            if (!existing) {
+              upsertDiscovered.run(server.id, ch.id, ch.name, now2);
+            }
+          }
+        });
+        txDiscover();
+        
+        processChannels(db, filteredChannels, server, now);
       } catch (err) {
         console.error(`[worker] Erro ao verificar servidor ${server.name}:`, err.message);
       }

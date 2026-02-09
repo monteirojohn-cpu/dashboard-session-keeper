@@ -129,6 +129,71 @@ app.get('/api/channel-status', (req, res) => {
   res.json({ success: true, statuses });
 });
 
+// ==================== MONITORED CHANNELS CRUD ====================
+app.get('/api/monitored-channels', (req, res) => {
+  const { server_id } = req.query;
+  let rows;
+  if (server_id) {
+    rows = db.prepare('SELECT * FROM monitored_channels WHERE server_id = ?').all(server_id);
+  } else {
+    rows = db.prepare('SELECT * FROM monitored_channels').all();
+  }
+  res.json({ success: true, channels: rows });
+});
+
+app.post('/api/monitored-channels', (req, res) => {
+  const { server_id, channels } = req.body;
+  if (!server_id || !Array.isArray(channels)) {
+    return res.status(400).json({ success: false, error: 'server_id e channels[] obrigatórios' });
+  }
+  const now = new Date().toISOString();
+  const upsert = db.prepare(`
+    INSERT INTO monitored_channels (server_id, channel_id, channel_name, enabled, updated_at)
+    VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(server_id, channel_id) DO UPDATE SET
+      channel_name = excluded.channel_name,
+      enabled = excluded.enabled,
+      updated_at = excluded.updated_at
+  `);
+  const tx = db.transaction((list) => {
+    for (const ch of list) {
+      upsert.run(server_id, ch.channel_id, ch.channel_name || '', ch.enabled ? 1 : 0, now);
+    }
+  });
+  tx(channels);
+  res.json({ success: true });
+});
+
+app.post('/api/monitored-channels/copy', (req, res) => {
+  const { source_server_id, target_server_id } = req.body;
+  if (!source_server_id || !target_server_id) {
+    return res.status(400).json({ success: false, error: 'source_server_id e target_server_id obrigatórios' });
+  }
+  const sourceChannels = db.prepare('SELECT * FROM monitored_channels WHERE server_id = ? AND enabled = 1').all(source_server_id);
+  // Get target channel_ids that exist
+  const targetChannelIds = new Set(
+    db.prepare('SELECT channel_id FROM channel_status WHERE server_id = ?').all(target_server_id).map(r => r.channel_id)
+  );
+  const now = new Date().toISOString();
+  const upsert = db.prepare(`
+    INSERT INTO monitored_channels (server_id, channel_id, channel_name, enabled, updated_at)
+    VALUES (?, ?, ?, 1, ?)
+    ON CONFLICT(server_id, channel_id) DO UPDATE SET enabled = 1, updated_at = excluded.updated_at
+  `);
+  let copied = 0;
+  const tx = db.transaction(() => {
+    for (const ch of sourceChannels) {
+      // Apply if target has this channel or if no target channels exist yet (copy blindly)
+      if (targetChannelIds.size === 0 || targetChannelIds.has(ch.channel_id)) {
+        upsert.run(target_server_id, ch.channel_id, ch.channel_name, now);
+        copied++;
+      }
+    }
+  });
+  tx();
+  res.json({ success: true, copied });
+});
+
 // ==================== NOTIFICATION DESTINATIONS CRUD ====================
 app.get('/api/notification-destinations', (req, res) => {
   const destinations = db.prepare('SELECT * FROM notification_destinations ORDER BY created_at').all();

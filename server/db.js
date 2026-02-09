@@ -81,9 +81,20 @@ function initTables() {
       value TEXT
     );
 
-    -- Ignored channels
+    -- Ignored channels (legacy)
     CREATE TABLE IF NOT EXISTS ignored_channels (
       channel_id TEXT PRIMARY KEY
+    );
+
+    -- Monitored channels per server
+    CREATE TABLE IF NOT EXISTS monitored_channels (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      server_id TEXT NOT NULL,
+      channel_id TEXT NOT NULL,
+      channel_name TEXT,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      updated_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(server_id, channel_id)
     );
   `);
 
