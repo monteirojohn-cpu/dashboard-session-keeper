@@ -5,6 +5,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs";
 import { toast } from "sonner";
 import { ConnectionTab } from "./settings/ConnectionTab";
 import { NotificationsTab, type TelegramDest, type WhatsappDest } from "./settings/NotificationsTab";
+import { MaintenanceTab } from "./settings/MaintenanceTab";
 import { ChannelsTab } from "./settings/ChannelsTab";
 import { TemplatesTab } from "./settings/TemplatesTab";
 import type { Channel } from "./ChannelCard";
@@ -136,6 +137,7 @@ export const SettingsDialog = ({ open, onOpenChange, channels = [] }: SettingsDi
             <TabsTrigger value="notifications" className="flex-1 text-[10px] font-mono">Notificações</TabsTrigger>
             <TabsTrigger value="channels" className="flex-1 text-[10px] font-mono">Canais</TabsTrigger>
             <TabsTrigger value="templates" className="flex-1 text-[10px] font-mono">Mensagem</TabsTrigger>
+            <TabsTrigger value="maintenance" className="flex-1 text-[10px] font-mono">Reset</TabsTrigger>
           </TabsList>
 
           <TabsContent value="connection" className="mt-4 overflow-y-auto flex-1">
@@ -165,6 +167,10 @@ export const SettingsDialog = ({ open, onOpenChange, channels = [] }: SettingsDi
               messageTemplate={messageTemplate}
               setMessageTemplate={setMessageTemplate}
             />
+          </TabsContent>
+
+          <TabsContent value="maintenance" className="mt-4 overflow-y-auto flex-1">
+            <MaintenanceTab />
           </TabsContent>
         </Tabs>
 

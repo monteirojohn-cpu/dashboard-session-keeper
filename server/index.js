@@ -464,6 +464,47 @@ app.put('/api/report-settings', (req, res) => {
   res.json({ success: true });
 });
 
+// ==================== ADMIN: RESET HISTORY ====================
+app.get('/api/admin/reset-history/dry', (req, res) => {
+  const { serverId } = req.query;
+  const sid = serverId || 'all';
+  let outageCount, statusCount;
+  if (sid === 'all') {
+    outageCount = db.prepare('SELECT COUNT(*) as c FROM channel_outage_events').get().c;
+    statusCount = db.prepare('SELECT COUNT(*) as c FROM channel_status').get().c;
+  } else {
+    outageCount = db.prepare('SELECT COUNT(*) as c FROM channel_outage_events WHERE server_id = ?').get(sid).c;
+    statusCount = db.prepare('SELECT COUNT(*) as c FROM channel_status WHERE server_id = ?').get(sid).c;
+  }
+  res.json({ success: true, dry: true, serverId: sid, counts: { channel_outage_events: outageCount, channel_status: statusCount } });
+});
+
+app.post('/api/admin/reset-history', (req, res) => {
+  const { serverId, confirm } = req.body;
+  if (confirm !== 'RESET') {
+    return res.status(400).json({ success: false, error: 'Confirmação inválida. Envie confirm: "RESET"' });
+  }
+  const sid = serverId || 'all';
+  const now = new Date().toISOString();
+  console.log(`[admin] RESET_HISTORY requested serverId=${sid} at=${now}`);
+
+  const tx = db.transaction(() => {
+    let outageResult, statusResult;
+    if (sid === 'all') {
+      outageResult = db.prepare('DELETE FROM channel_outage_events').run();
+      statusResult = db.prepare('DELETE FROM channel_status').run();
+    } else {
+      outageResult = db.prepare('DELETE FROM channel_outage_events WHERE server_id = ?').run(sid);
+      statusResult = db.prepare('DELETE FROM channel_status WHERE server_id = ?').run(sid);
+    }
+    return { channel_outage_events: outageResult.changes, channel_status: statusResult.changes };
+  });
+
+  const deleted = tx();
+  console.log(`[admin] RESET_HISTORY completed serverId=${sid} deleted_outages=${deleted.channel_outage_events} deleted_status=${deleted.channel_status}`);
+  res.json({ success: true, deleted });
+});
+
 // ==================== START ====================
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`✅ Signal Monitor API v3.0 rodando na porta ${PORT}`);
