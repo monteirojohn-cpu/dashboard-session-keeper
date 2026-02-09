@@ -26,6 +26,8 @@ async function pollAllServers() {
 
   try {
     const servers = db.prepare("SELECT * FROM servers WHERE status = 'active'").all();
+    const allDownEvents = [];
+    const allUpEvents = [];
 
     for (const server of servers) {
       try {
@@ -57,10 +59,18 @@ async function pollAllServers() {
         });
         txDiscover();
 
-        processChannels(db, filteredChannels, server, now);
+        const events = processChannels(db, filteredChannels, server, now);
+        allDownEvents.push(...events.downEvents);
+        allUpEvents.push(...events.upEvents);
       } catch (err) {
         console.error(`[worker] Erro ao verificar servidor ${server.name}:`, err.message);
       }
+    }
+
+    // Batch notifications
+    if (allDownEvents.length > 0 || allUpEvents.length > 0) {
+      console.log(`[batch] downEvents=${allDownEvents.length} upEvents=${allUpEvents.length} => sending batched notifications`);
+      await sendBatchNotifications(allDownEvents, allUpEvents);
     }
   } catch (err) {
     console.error('[worker] Erro geral:', err.message);
@@ -99,7 +109,8 @@ function processChannels(db, channels, server, now) {
     WHERE channel_id = ? AND server_id = ? AND ended_at IS NULL
   `);
 
-  const notifications = []; // collect notifications to send after transaction
+  const downEvents = [];
+  const upEvents = [];
 
   const transaction = db.transaction((channelsList) => {
     for (const ch of channelsList) {
@@ -113,38 +124,33 @@ function processChannels(db, channels, server, now) {
       let offlineSince = prev ? prev.offline_since : null;
 
       if (isOnline) {
-        // Channel is online
         if (isDown) {
-          // Was confirmed down → close outage event, notify recovery
           closeOutage.run(now, now, ch.id, sid);
+          const durSec = downSince ? Math.round((Date.now() - new Date(downSince).getTime()) / 1000) : 0;
           console.log(`[rule] channel="${ch.name}" id=${ch.id} server="${server.name}" status=ONLINE is_down=1 => RECOVERED => notifying UP`);
-          notifications.push({ type: 'recovery', channel: ch, server, downSince });
+          upEvents.push({ channel_name: ch.name, channel_id: ch.id, server_name: server.name, downtime_seconds: durSec });
         } else if (failCount > 0) {
           console.log(`[rule] channel="${ch.name}" id=${ch.id} server="${server.name}" status=ONLINE fail_count=${failCount} => RESET (back before threshold)`);
         }
         failCount = 0;
         isDown = 0;
         downSince = null;
-        // Set online_since only on transition
         if (!prev || prev.status !== 'online') {
           onlineSince = now;
         }
         offlineSince = null;
       } else {
-        // Channel is offline/degraded
         failCount += 1;
         console.log(`[rule] channel="${ch.name}" id=${ch.id} server="${server.name}" status=${ch.status.toUpperCase()} fail_count=${failCount} is_down=${isDown}`);
 
         if (!isDown && failCount >= FAIL_THRESHOLD) {
-          // Confirmed down after 3 consecutive failures
           isDown = 1;
           downSince = now;
           openOutage.run(ch.id, ch.name, sid, now);
           console.log(`[rule] channel="${ch.name}" id=${ch.id} FAIL_THRESHOLD reached (${FAIL_THRESHOLD}) => CONFIRMED_DOWN => notifying DOWN`);
-          notifications.push({ type: 'down', channel: ch, server, downSince: now });
+          downEvents.push({ channel_name: ch.name, channel_id: ch.id, server_name: server.name });
         }
 
-        // Set offline_since on transition
         if (!prev || prev.status === 'online') {
           offlineSince = now;
         }
@@ -162,50 +168,56 @@ function processChannels(db, channels, server, now) {
 
   transaction(channels);
 
-  // Send notifications outside transaction
-  for (const n of notifications) {
-    sendNotification(n).catch(err => {
-      console.error(`[worker] Erro ao enviar notificação:`, err.message);
-    });
-  }
+  return { downEvents, upEvents };
 }
 
-async function sendNotification({ type, channel, server, downSince }) {
+function formatDuration(seconds) {
+  if (seconds > 3600) return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`;
+  return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+}
+
+async function sendBatchNotifications(downEvents, upEvents) {
   const db = getDb();
   const hora = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit', timeZone: 'America/Sao_Paulo' });
   const data = new Date().toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
 
-  let message;
-  if (type === 'down') {
-    message = `🚨 *SIGNAL MONITOR - CANAL CAIU*\n\n📡 *Canal:* ${channel.name}\n🖥️ *Servidor:* ${server.name}\n🕐 *Horário:* ${hora}\n📅 *Data:* ${data}\n\n⚠️ Queda confirmada após 3 verificações consecutivas.`;
-  } else {
-    const durSec = downSince ? Math.round((Date.now() - new Date(downSince).getTime()) / 1000) : 0;
-    const durStr = durSec > 3600 ? `${Math.floor(durSec / 3600)}h ${Math.floor((durSec % 3600) / 60)}m` : `${Math.floor(durSec / 60)}m ${durSec % 60}s`;
-    message = `✅ *SIGNAL MONITOR - CANAL VOLTOU*\n\n📡 *Canal:* ${channel.name}\n🖥️ *Servidor:* ${server.name}\n🕐 *Horário:* ${hora}\n📅 *Data:* ${data}\n⏱️ *Tempo fora:* ${durStr}`;
+  const messages = [];
+
+  if (downEvents.length > 0) {
+    const lines = downEvents.map((e, i) => `${i + 1}) 📡 ${e.channel_name} — 🖥️ ${e.server_name}`).join('\n');
+    messages.push(`🚨 *SIGNAL MONITOR — ${downEvents.length} ${downEvents.length === 1 ? 'CANAL CAIU' : 'CANAIS CAÍRAM'}*\n\n🕐 ${data} ${hora}\n\n${lines}\n\n⚠️ Queda confirmada após 3 verificações consecutivas.`);
   }
 
-  // Get notification destinations from DB
+  if (upEvents.length > 0) {
+    const lines = upEvents.map((e, i) => `${i + 1}) 📡 ${e.channel_name} — 🖥️ ${e.server_name} — ⏱️ ${formatDuration(e.downtime_seconds)}`).join('\n');
+    messages.push(`✅ *SIGNAL MONITOR — ${upEvents.length} ${upEvents.length === 1 ? 'CANAL VOLTOU' : 'CANAIS VOLTARAM'}*\n\n🕐 ${data} ${hora}\n\n${lines}`);
+  }
+
   const destinations = db.prepare('SELECT * FROM notification_destinations').all();
 
-  for (const dest of destinations) {
-    try {
-      const config = JSON.parse(dest.config);
-      if (dest.type === 'telegram' && config.botToken && config.chatId) {
-        const r = await fetch(`https://api.telegram.org/bot${config.botToken}/sendMessage`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ chat_id: config.chatId, text: message, parse_mode: 'Markdown' }),
-        });
-        const result = await r.json();
-        console.log(`[notify] telegram type=${type.toUpperCase()} channel="${channel.name}" chatId=${config.chatId} success=${r.ok} ${r.ok ? '' : 'error=' + (result.description || '')}`);
-      } else if (dest.type === 'whatsapp' && config.phone && config.apiKey) {
-        const encodedMessage = encodeURIComponent(message);
-        const url = `https://api.callmebot.com/whatsapp.php?phone=${encodeURIComponent(config.phone)}&text=${encodedMessage}&apikey=${encodeURIComponent(config.apiKey)}`;
-        const r = await fetch(url);
-        console.log(`[notify] whatsapp type=${type.toUpperCase()} channel="${channel.name}" phone=${config.phone} success=${r.ok}`);
+  for (const message of messages) {
+    const type = message.startsWith('🚨') ? 'DOWN' : 'UP';
+    const count = type === 'DOWN' ? downEvents.length : upEvents.length;
+
+    for (const dest of destinations) {
+      try {
+        const config = JSON.parse(dest.config);
+        if (dest.type === 'telegram' && config.botToken && config.chatId) {
+          const r = await fetch(`https://api.telegram.org/bot${config.botToken}/sendMessage`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ chat_id: config.chatId, text: message, parse_mode: 'Markdown' }),
+          });
+          const result = await r.json();
+          console.log(`[notify] telegram batch type=${type} count=${count} success=${r.ok} ${r.ok ? '' : 'error=' + (result.description || '')}`);
+        } else if (dest.type === 'whatsapp' && config.phone && config.apiKey) {
+          const url = `https://api.callmebot.com/whatsapp.php?phone=${encodeURIComponent(config.phone)}&text=${encodeURIComponent(message)}&apikey=${encodeURIComponent(config.apiKey)}`;
+          const r = await fetch(url);
+          console.log(`[notify] whatsapp batch type=${type} count=${count} success=${r.ok}`);
+        }
+      } catch (err) {
+        console.error(`[notify] ${dest.type} batch type=${type} count=${count} error=${err.message}`);
       }
-    } catch (err) {
-      console.error(`[notify] ${dest.type} type=${type.toUpperCase()} channel="${channel.name}" error=${err.message}`);
     }
   }
 }
