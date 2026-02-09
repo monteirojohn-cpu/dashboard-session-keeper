@@ -148,6 +148,25 @@ function migrateSchema() {
   if (!serverCols.includes('maintenance_tz')) {
     db.exec(`ALTER TABLE servers ADD COLUMN maintenance_tz TEXT DEFAULT 'America/Sao_Paulo'`);
   }
+
+  // Auto-report settings defaults
+  const existingSettings = db.prepare("SELECT key FROM settings WHERE key LIKE 'report_%'").all();
+  const settingKeys = new Set(existingSettings.map(s => s.key));
+  const defaults = {
+    enable_auto_reports: 'true',
+    report_frequency: 'weekly',
+    report_day_of_week: 'mon',
+    report_time: '08:00',
+    report_timezone: 'America/Sao_Paulo',
+    report_server_id: 'all',
+    report_send_pdf: 'true',
+    report_send_summary: 'true',
+    last_weekly_report_key: '',
+  };
+  const insertSetting = db.prepare('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)');
+  for (const [k, v] of Object.entries(defaults)) {
+    if (!settingKeys.has(k)) insertSetting.run(k, v);
+  }
 }
 
 module.exports = { getDb };

@@ -287,12 +287,252 @@ async function sendBatchNotifications(downEvents, upEvents) {
   }
 }
 
+// ==================== WEEKLY REPORT ====================
+
+function getWeekKey(date) {
+  const d = new Date(date);
+  const jan1 = new Date(d.getFullYear(), 0, 1);
+  const days = Math.floor((d - jan1) / 86400000);
+  const week = Math.ceil((days + jan1.getDay() + 1) / 7);
+  return `${d.getFullYear()}-W${String(week).padStart(2, '0')}`;
+}
+
+function getSetting(db, key) {
+  const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key);
+  return row ? row.value : null;
+}
+
+function getWeeklyReportData(db, startDate, endDate, serverId) {
+  let sql = `
+    SELECT o.*, s.name as server_name
+    FROM channel_outage_events o
+    LEFT JOIN servers s ON s.id = o.server_id
+    WHERE o.started_at >= ? AND o.started_at <= ?
+  `;
+  const params = [startDate, endDate];
+  if (serverId && serverId !== 'all') {
+    sql += ' AND o.server_id = ?';
+    params.push(serverId);
+  }
+  sql += ' ORDER BY o.started_at DESC';
+  const outages = db.prepare(sql).all(...params);
+
+  const totalOutages = outages.length;
+  const totalOfflineSeconds = outages.reduce((sum, o) => sum + (o.duration_seconds || 0), 0);
+  const openOutages = outages.filter(o => !o.ended_at).length;
+
+  const durationMap = {};
+  const countMap = {};
+  for (const o of outages) {
+    const key = o.channel_name || o.channel_id;
+    durationMap[key] = (durationMap[key] || 0) + (o.duration_seconds || 0);
+    countMap[key] = (countMap[key] || 0) + 1;
+  }
+  const topByDuration = Object.entries(durationMap).sort((a, b) => b[1] - a[1]).slice(0, 10).map(([name, dur]) => ({ name, duration: dur }));
+  const topByCount = Object.entries(countMap).sort((a, b) => b[1] - a[1]).slice(0, 10).map(([name, count]) => ({ name, count }));
+
+  return { outages, totalOutages, totalOfflineSeconds, openOutages, topByDuration, topByCount };
+}
+
+function buildSummaryMessage(data, serverId, startStr, endStr) {
+  const serverLabel = (!serverId || serverId === 'all') ? 'TODOS' : serverId;
+  const offH = Math.floor(data.totalOfflineSeconds / 3600);
+  const offM = Math.floor((data.totalOfflineSeconds % 3600) / 60);
+
+  let top10 = '';
+  if (data.topByDuration.length > 0) {
+    top10 = data.topByDuration.map((t, i) => `${i + 1}) ${t.name} — ${formatDuration(t.duration)}`).join('\n');
+  } else {
+    top10 = 'Nenhuma queda registrada 🎉';
+  }
+
+  return `📊 *SIGNAL MONITOR — RELATÓRIO SEMANAL*\n\n🖥️ Servidor: ${serverLabel}\n📅 Período: ${startStr} a ${endStr}\n\n✅ Total de quedas: ${data.totalOutages}\n⏱️ Offline total: ${offH}h ${offM}m\n\n🔥 *TOP 10 (tempo offline)*\n${top10}\n\n📎 PDF completo anexado.`;
+}
+
+async function generateReportPDF(data, serverId, startStr, endStr) {
+  const PDFDocument = require('pdfkit');
+
+  return new Promise((resolve, reject) => {
+    const doc = new PDFDocument({ size: 'A4', margin: 50 });
+    const chunks = [];
+    doc.on('data', chunk => chunks.push(chunk));
+    doc.on('end', () => resolve(Buffer.concat(chunks)));
+    doc.on('error', reject);
+
+    const serverLabel = (!serverId || serverId === 'all') ? 'TODOS' : serverId;
+    const offH = Math.floor(data.totalOfflineSeconds / 3600);
+    const offM = Math.floor((data.totalOfflineSeconds % 3600) / 60);
+
+    doc.fontSize(20).text('SIGNAL MONITOR — Relatório Semanal', { align: 'center' });
+    doc.moveDown();
+    doc.fontSize(12).text(`Servidor: ${serverLabel}`);
+    doc.text(`Período: ${startStr} a ${endStr}`);
+    doc.text(`Total de quedas: ${data.totalOutages}`);
+    doc.text(`Offline total: ${offH}h ${offM}m`);
+    doc.text(`Quedas abertas: ${data.openOutages}`);
+    doc.moveDown();
+
+    doc.fontSize(14).text('TOP 10 — Maior tempo offline', { underline: true });
+    doc.moveDown(0.5);
+    if (data.topByDuration.length > 0) {
+      data.topByDuration.forEach((t, i) => {
+        doc.fontSize(11).text(`${i + 1}) ${t.name} — ${formatDuration(t.duration)}`);
+      });
+    } else {
+      doc.fontSize(11).text('Nenhuma queda registrada.');
+    }
+    doc.moveDown();
+
+    doc.fontSize(14).text('TOP 10 — Mais quedas', { underline: true });
+    doc.moveDown(0.5);
+    if (data.topByCount.length > 0) {
+      data.topByCount.forEach((t, i) => {
+        doc.fontSize(11).text(`${i + 1}) ${t.name} — ${t.count} queda(s)`);
+      });
+    } else {
+      doc.fontSize(11).text('Nenhuma queda registrada.');
+    }
+    doc.moveDown();
+
+    // Full outage list
+    doc.fontSize(14).text('Detalhamento de quedas', { underline: true });
+    doc.moveDown(0.5);
+    if (data.outages.length > 0) {
+      for (const o of data.outages) {
+        const dur = o.duration_seconds ? formatDuration(o.duration_seconds) : 'em andamento';
+        const start = toBRTime(o.started_at) + ' ' + toBRDate(o.started_at);
+        const end = o.ended_at ? toBRTime(o.ended_at) + ' ' + toBRDate(o.ended_at) : '—';
+        doc.fontSize(9).text(`• ${o.channel_name || o.channel_id} | ${o.server_name || o.server_id} | Início: ${start} | Fim: ${end} | Duração: ${dur}`);
+      }
+    } else {
+      doc.fontSize(11).text('Nenhuma queda no período.');
+    }
+
+    doc.end();
+  });
+}
+
+async function sendWeeklyReport() {
+  const db = getDb();
+
+  const enabled = getSetting(db, 'enable_auto_reports');
+  if (enabled !== 'true') return;
+
+  const tz = getSetting(db, 'report_timezone') || 'America/Sao_Paulo';
+  const now = new Date();
+  const nowStr = now.toLocaleString('en-US', { timeZone: tz });
+  const localNow = new Date(nowStr);
+
+  const dayOfWeek = localNow.getDay(); // 0=Sun, 1=Mon
+  const targetDay = getSetting(db, 'report_day_of_week') || 'mon';
+  const dayMap = { sun: 0, mon: 1, tue: 2, wed: 3, thu: 4, fri: 5, sat: 6 };
+  if (dayOfWeek !== (dayMap[targetDay] ?? 1)) return;
+
+  const targetTime = getSetting(db, 'report_time') || '08:00';
+  const currentHHMM = `${String(localNow.getHours()).padStart(2, '0')}:${String(localNow.getMinutes()).padStart(2, '0')}`;
+  if (currentHHMM !== targetTime) return;
+
+  // Idempotency check
+  const weekKey = getWeekKey(localNow);
+  const lastKey = getSetting(db, 'last_weekly_report_key') || '';
+  if (lastKey === weekKey) return;
+
+  console.log(`[report] Weekly report triggered – weekKey=${weekKey}`);
+
+  const serverId = getSetting(db, 'report_server_id') || 'all';
+  const sendPdf = getSetting(db, 'report_send_pdf') !== 'false';
+  const sendSummary = getSetting(db, 'report_send_summary') !== 'false';
+
+  // Calculate previous week range (Mon 00:00 to Sun 23:59:59 in SP timezone)
+  const endOfWeek = new Date(localNow);
+  endOfWeek.setDate(endOfWeek.getDate() - 1); // Sunday
+  endOfWeek.setHours(23, 59, 59, 999);
+
+  const startOfWeek = new Date(endOfWeek);
+  startOfWeek.setDate(startOfWeek.getDate() - 6); // Previous Monday
+  startOfWeek.setHours(0, 0, 0, 0);
+
+  const startISO = startOfWeek.toISOString();
+  const endISO = endOfWeek.toISOString();
+  const startStr = toBRDate(startOfWeek);
+  const endStr = toBRDate(endOfWeek);
+
+  const reportData = getWeeklyReportData(db, startISO, endISO, serverId);
+  console.log(`[report] Data: outages=${reportData.totalOutages} offlineSec=${reportData.totalOfflineSeconds}`);
+
+  const destinations = db.prepare("SELECT * FROM notification_destinations WHERE type = 'telegram'").all();
+  if (destinations.length === 0) {
+    console.warn('[report] No telegram destinations configured – skipping weekly report send');
+    db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('last_weekly_report_key', ?)").run(weekKey);
+    return;
+  }
+
+  for (const dest of destinations) {
+    const config = JSON.parse(dest.config);
+    if (!config.botToken || !config.chatId) continue;
+
+    try {
+      // 1) Send summary message
+      if (sendSummary) {
+        const summary = buildSummaryMessage(reportData, serverId, startStr, endStr);
+        const r = await fetch(`https://api.telegram.org/bot${config.botToken}/sendMessage`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ chat_id: config.chatId, text: summary, parse_mode: 'Markdown' }),
+        });
+        const result = await r.json();
+        console.log(`[report] Telegram summary sent to chatId=${config.chatId} success=${r.ok} ${r.ok ? '' : result.description || ''}`);
+      }
+
+      // 2) Send PDF
+      if (sendPdf) {
+        const pdfBuffer = await generateReportPDF(reportData, serverId, startStr, endStr);
+        const filename = `relatorio-semanal-${weekKey}.pdf`;
+
+        // Use multipart/form-data for sendDocument
+        const boundary = '----FormBoundary' + Date.now().toString(36);
+        const parts = [];
+        parts.push(`--${boundary}\r\nContent-Disposition: form-data; name="chat_id"\r\n\r\n${config.chatId}`);
+        parts.push(`--${boundary}\r\nContent-Disposition: form-data; name="document"; filename="${filename}"\r\nContent-Type: application/pdf\r\n\r\n`);
+
+        const head = Buffer.from(parts.join('\r\n') + '\r\n', 'utf-8');
+        const tail = Buffer.from(`\r\n--${boundary}--\r\n`, 'utf-8');
+        const body = Buffer.concat([head, pdfBuffer, tail]);
+
+        const r = await fetch(`https://api.telegram.org/bot${config.botToken}/sendDocument`, {
+          method: 'POST',
+          headers: { 'Content-Type': `multipart/form-data; boundary=${boundary}` },
+          body: body,
+        });
+        const result = await r.json();
+        console.log(`[report] Telegram PDF sent to chatId=${config.chatId} success=${r.ok} ${r.ok ? '' : result.description || ''}`);
+      }
+    } catch (err) {
+      console.error(`[report] Error sending to chatId=${config.chatId}: ${err.message}`);
+    }
+  }
+
+  // Mark as sent
+  db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('last_weekly_report_key', ?)").run(weekKey);
+  console.log(`[report] Weekly report completed – weekKey=${weekKey} marked as sent`);
+}
+
+// ==================== SCHEDULER ====================
+
+const REPORT_CHECK_INTERVAL_MS = 60_000; // 60 seconds
+
 function startWorker() {
   console.log(`[worker] Monitoring started – interval=${POLL_INTERVAL_MS / 1000}s threshold=${FAIL_THRESHOLD}x (~${Math.round(FAIL_THRESHOLD * POLL_INTERVAL_MS / 1000 / 60)}m${(FAIL_THRESHOLD * POLL_INTERVAL_MS / 1000) % 60}s)`);
   // Run immediately on startup
   pollAllServers();
   // Then every 30s
   setInterval(pollAllServers, POLL_INTERVAL_MS);
+
+  // Weekly report scheduler - check every 60s
+  console.log('[worker] Weekly report scheduler started – checking every 60s');
+  setInterval(() => {
+    sendWeeklyReport().catch(err => console.error('[report] Scheduler error:', err.message));
+  }, REPORT_CHECK_INTERVAL_MS);
 }
 
-module.exports = { startWorker };
+module.exports = { startWorker, getWeeklyReportData, buildSummaryMessage, generateReportPDF, formatDuration, toBRTime, toBRDate };
