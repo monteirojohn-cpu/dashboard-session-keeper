@@ -361,6 +361,43 @@ app.post('/api/send-whatsapp', async (req, res) => {
   }
 });
 
+// ==================== DEBUG: FETCH METRICS (no body needed) ====================
+app.get('/api/debug/metrics', async (req, res) => {
+  try {
+    const serverId = req.query.server_id || 'default';
+    const server = db.prepare('SELECT * FROM servers WHERE id = ?').get(serverId);
+    if (!server) return res.json({ success: false, error: `Servidor "${serverId}" não encontrado` });
+
+    console.log(`[debug/metrics] Fetching from server "${server.name}" (${server.base_url})`);
+    const channels = await fetchChannelsFromServer(server);
+
+    // Also include channel_status from DB for comparison
+    const statuses = db.prepare('SELECT * FROM channel_status WHERE server_id = ?').all(serverId);
+    const statusMap = Object.fromEntries(statuses.map(s => [s.channel_id, s]));
+
+    const enriched = channels.map(ch => ({
+      ...ch,
+      db_status: statusMap[ch.id] || null,
+    }));
+
+    res.json({
+      success: true,
+      server: { id: server.id, name: server.name, base_url: server.base_url },
+      live_channels: enriched.length,
+      channels: enriched,
+      db_statuses_count: statuses.length,
+      down_channels: statuses.filter(s => s.is_down).map(s => ({
+        channel_id: s.channel_id,
+        fail_count: s.fail_count,
+        down_since: s.down_since,
+      })),
+    });
+  } catch (error) {
+    console.error('[debug/metrics] Erro:', error);
+    res.json({ success: false, error: error.message });
+  }
+});
+
 // ==================== START ====================
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`✅ Signal Monitor API v3.0 rodando na porta ${PORT}`);
