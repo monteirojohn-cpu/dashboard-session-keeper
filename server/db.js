@@ -121,6 +121,9 @@ function migrateSchema() {
   if (!cols.includes('last_check_at')) {
     db.exec(`ALTER TABLE channel_status ADD COLUMN last_check_at TEXT`);
   }
+  if (!cols.includes('channel_name')) {
+    db.exec(`ALTER TABLE channel_status ADD COLUMN channel_name TEXT`);
+  }
 }
 
 module.exports = { getDb };
