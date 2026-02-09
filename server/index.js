@@ -40,20 +40,20 @@ app.post('/api/fetch-metrics', async (req, res) => {
     const monitoredRows = db.prepare('SELECT * FROM monitored_channels WHERE server_id = ?').all(sid);
     let filteredChannels = channels;
     if (monitoredRows.length > 0) {
-      const enabledIds = new Set(monitoredRows.filter(r => r.enabled).map(r => r.channel_id));
-      filteredChannels = channels.filter(ch => enabledIds.has(ch.id));
-      console.log(`[fetch-metrics] Monitored: ${monitoredRows.length} total, ${enabledIds.size} enabled, ${filteredChannels.length} after filter`);
-      
-      // Safety: if filter removes ALL channels but there were live channels, skip filter (likely ID mismatch)
-      if (filteredChannels.length === 0 && channels.length > 0) {
-        console.warn(`[fetch-metrics] WARNING: Filter removed ALL channels! Likely ID mismatch. Returning all channels unfiltered.`);
-        // Log some IDs for debugging
-        const sampleLive = channels.slice(0, 3).map(c => c.id);
-        const sampleDb = [...enabledIds].slice(0, 3);
-        console.warn(`[fetch-metrics] Sample live IDs: ${JSON.stringify(sampleLive)}`);
-        console.warn(`[fetch-metrics] Sample DB IDs: ${JSON.stringify(sampleDb)}`);
-        filteredChannels = channels;
-      }
+      // Normalize IDs: remove trailing ".0", convert to string for consistent comparison
+      const normalizeId = (id) => String(id).replace(/\.0$/, '');
+      const enabledIds = new Set(monitoredRows.filter(r => r.enabled).map(r => normalizeId(r.channel_id)));
+      const disabledIds = new Set(monitoredRows.filter(r => !r.enabled).map(r => normalizeId(r.channel_id)));
+      filteredChannels = channels.filter(ch => {
+        const nid = normalizeId(ch.id);
+        // If channel is explicitly disabled, exclude it
+        if (disabledIds.has(nid)) return false;
+        // If channel is in enabled list, include it
+        if (enabledIds.has(nid)) return true;
+        // If channel is not in DB at all (new channel), include it by default
+        return true;
+      });
+      console.log(`[fetch-metrics] Monitored: ${monitoredRows.length} total, ${enabledIds.size} enabled, ${disabledIds.size} disabled, ${filteredChannels.length} after filter`);
     } else {
       console.log(`[fetch-metrics] No monitored_channels for server_id="${sid}", showing all`);
     }
