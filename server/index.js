@@ -95,9 +95,21 @@ app.post('/api/servers', (req, res) => {
 });
 
 app.put('/api/servers/:id', (req, res) => {
-  const { name, base_url, username, password, type, status } = req.body;
-  db.prepare('UPDATE servers SET name=COALESCE(?,name), base_url=COALESCE(?,base_url), username=COALESCE(?,username), password=COALESCE(?,password), type=COALESCE(?,type), status=COALESCE(?,status) WHERE id=?')
-    .run(name, base_url, username, password, type, status, req.params.id);
+  const { name, base_url, username, password, type, status,
+    maintenance_enabled, maintenance_start, maintenance_end, maintenance_days,
+    maintenance_silence_down, maintenance_silence_up, maintenance_tz } = req.body;
+  db.prepare(`UPDATE servers SET
+    name=COALESCE(?,name), base_url=COALESCE(?,base_url), username=COALESCE(?,username),
+    password=COALESCE(?,password), type=COALESCE(?,type), status=COALESCE(?,status),
+    maintenance_enabled=COALESCE(?,maintenance_enabled), maintenance_start=COALESCE(?,maintenance_start),
+    maintenance_end=COALESCE(?,maintenance_end), maintenance_days=COALESCE(?,maintenance_days),
+    maintenance_silence_down=COALESCE(?,maintenance_silence_down), maintenance_silence_up=COALESCE(?,maintenance_silence_up),
+    maintenance_tz=COALESCE(?,maintenance_tz)
+    WHERE id=?`)
+    .run(name, base_url, username, password, type, status,
+      maintenance_enabled ?? null, maintenance_start ?? null, maintenance_end ?? null,
+      maintenance_days ?? null, maintenance_silence_down ?? null, maintenance_silence_up ?? null,
+      maintenance_tz ?? null, req.params.id);
   res.json({ success: true });
 });
 

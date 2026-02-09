@@ -27,6 +27,35 @@ function toBRDate(date) {
   return d.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
 }
 
+function isWithinMaintenanceWindow(server) {
+  if (!server.maintenance_enabled) return false;
+  if (!server.maintenance_start || !server.maintenance_end) return false;
+
+  const tz = server.maintenance_tz || 'America/Sao_Paulo';
+  const now = new Date();
+  const nowStr = now.toLocaleString('en-US', { timeZone: tz });
+  const localNow = new Date(nowStr);
+
+  const [startH, startM] = server.maintenance_start.split(':').map(Number);
+  const [endH, endM] = server.maintenance_end.split(':').map(Number);
+  const currentMinutes = localNow.getHours() * 60 + localNow.getMinutes();
+  const startMinutes = startH * 60 + startM;
+  const endMinutes = endH * 60 + endM;
+
+  // Check days of week if configured
+  if (server.maintenance_days) {
+    const days = JSON.parse(server.maintenance_days); // e.g. [0,1,2,3,4,5,6]
+    if (days.length > 0 && !days.includes(localNow.getDay())) return false;
+  }
+
+  // Handle overnight windows (e.g. 23:00 - 05:00)
+  if (startMinutes <= endMinutes) {
+    return currentMinutes >= startMinutes && currentMinutes < endMinutes;
+  } else {
+    return currentMinutes >= startMinutes || currentMinutes < endMinutes;
+  }
+}
+
 async function pollAllServers() {
   if (running) return; // guard against overlap
   running = true;
@@ -70,8 +99,32 @@ async function pollAllServers() {
         txDiscover();
 
         const events = processChannels(db, filteredChannels, server, now);
-        allDownEvents.push(...events.downEvents);
-        allUpEvents.push(...events.upEvents);
+        
+        // Apply maintenance window suppression per server
+        const inMaintenance = isWithinMaintenanceWindow(server);
+        
+        if (inMaintenance) {
+          if (events.downEvents.length > 0 && server.maintenance_silence_down) {
+            console.log(`[maintenance] SUPPRESS_BATCH_DOWN server="${server.name}" count=${events.downEvents.length}`);
+            for (const e of events.downEvents) {
+              console.log(`[maintenance] SUPPRESS_DOWN server="${server.name}" channel="${e.channel_name}" reason="within window"`);
+            }
+          } else {
+            allDownEvents.push(...events.downEvents.map(e => ({ ...e, server_id: server.id })));
+          }
+          
+          if (events.upEvents.length > 0 && server.maintenance_silence_up) {
+            console.log(`[maintenance] SUPPRESS_BATCH_UP server="${server.name}" count=${events.upEvents.length}`);
+            for (const e of events.upEvents) {
+              console.log(`[maintenance] SUPPRESS_UP server="${server.name}" channel="${e.channel_name}" reason="within window"`);
+            }
+          } else {
+            allUpEvents.push(...events.upEvents.map(e => ({ ...e, server_id: server.id })));
+          }
+        } else {
+          allDownEvents.push(...events.downEvents.map(e => ({ ...e, server_id: server.id })));
+          allUpEvents.push(...events.upEvents.map(e => ({ ...e, server_id: server.id })));
+        }
       } catch (err) {
         console.error(`[worker] Erro ao verificar servidor ${server.name}:`, err.message);
       }
