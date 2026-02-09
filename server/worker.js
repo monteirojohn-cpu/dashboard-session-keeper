@@ -172,8 +172,8 @@ function processChannels(db, channels, server, now) {
 
 async function sendNotification({ type, channel, server, downSince }) {
   const db = getDb();
-  const hora = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-  const data = new Date().toLocaleDateString('pt-BR');
+  const hora = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit', timeZone: 'America/Sao_Paulo' });
+  const data = new Date().toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
 
   let message;
   if (type === 'down') {
