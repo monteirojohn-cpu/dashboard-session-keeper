@@ -11,6 +11,7 @@ interface OutageEvent {
   channel_id: string;
   channel_name: string;
   server_id: string;
+  server_name: string | null;
   started_at: string;
   ended_at: string | null;
   duration_seconds: number | null;
@@ -74,7 +75,7 @@ const Reports = () => {
   const exportCSV = () => {
     const headers = "Canal,Servidor,Início,Fim,Duração (s)\n";
     const rows = outages.map(o =>
-      `"${o.channel_name || o.channel_id}","${o.server_id}","${o.started_at}","${o.ended_at || ""}","${o.duration_seconds || ""}"`
+      `"${o.channel_name || o.channel_id}","${o.server_name || o.server_id}","${o.started_at}","${o.ended_at || ""}","${o.duration_seconds || ""}"`
     ).join("\n");
     const blob = new Blob([headers + rows], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
@@ -185,7 +186,7 @@ const Reports = () => {
                   outages.map((o) => (
                     <tr key={o.id} className="border-b border-border/50 hover:bg-muted/20">
                       <td className="p-3 text-foreground">{o.channel_name || o.channel_id}</td>
-                      <td className="p-3 text-muted-foreground">{o.server_id}</td>
+                      <td className="p-3 text-muted-foreground">{o.server_name || o.server_id}</td>
                       <td className="p-3 text-muted-foreground">{formatDate(o.started_at)}</td>
                       <td className="p-3 text-muted-foreground">{formatDate(o.ended_at)}</td>
                       <td className="p-3 text-foreground">{o.duration_seconds ? formatDuration(o.duration_seconds) : "—"}</td>

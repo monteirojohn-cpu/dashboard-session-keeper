@@ -11,6 +11,7 @@ function getDb() {
     db.pragma('journal_mode = WAL');
     db.pragma('foreign_keys = ON');
     initTables();
+    migrateSchema();
   }
   return db;
 }
@@ -36,6 +37,10 @@ function initTables() {
       status TEXT NOT NULL DEFAULT 'unknown',
       online_since TEXT,
       offline_since TEXT,
+      fail_count INTEGER NOT NULL DEFAULT 0,
+      is_down INTEGER NOT NULL DEFAULT 0,
+      down_since TEXT,
+      last_check_at TEXT,
       updated_at TEXT DEFAULT (datetime('now')),
       PRIMARY KEY (channel_id, server_id)
     );
@@ -87,6 +92,23 @@ function initTables() {
   if (count.c === 0) {
     db.prepare(`INSERT INTO servers (id, name, base_url, username, password) VALUES (?, ?, ?, ?, ?)`)
       .run('default', 'Servidor Principal', 'http://157.254.55.203:8089', 'admin', '');
+  }
+}
+
+function migrateSchema() {
+  // Add new columns to channel_status if they don't exist
+  const cols = db.prepare("PRAGMA table_info(channel_status)").all().map(c => c.name);
+  if (!cols.includes('fail_count')) {
+    db.exec(`ALTER TABLE channel_status ADD COLUMN fail_count INTEGER NOT NULL DEFAULT 0`);
+  }
+  if (!cols.includes('is_down')) {
+    db.exec(`ALTER TABLE channel_status ADD COLUMN is_down INTEGER NOT NULL DEFAULT 0`);
+  }
+  if (!cols.includes('down_since')) {
+    db.exec(`ALTER TABLE channel_status ADD COLUMN down_since TEXT`);
+  }
+  if (!cols.includes('last_check_at')) {
+    db.exec(`ALTER TABLE channel_status ADD COLUMN last_check_at TEXT`);
   }
 }
 
