@@ -84,7 +84,7 @@ export const ChannelCard = ({ channel }: { channel: Channel }) => {
             <span className="font-mono text-secondary-foreground">{channel.bitrate}</span>
           </div>
         )}
-        {channel.statusSince && (
+        {(channel.onlineSince || channel.offlineSince || channel.statusSince) && elapsed && (
           <div className="flex items-center justify-between text-xs">
             <span className="text-muted-foreground flex items-center gap-1"><Timer className="h-3 w-3" /> Tempo {channel.status === "online" ? "Online" : "Fora"}</span>
             <span className="font-mono text-secondary-foreground">{elapsed}</span>

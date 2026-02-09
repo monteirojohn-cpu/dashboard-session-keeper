@@ -70,7 +70,7 @@ export const SettingsDialog = ({ open, onOpenChange, channels = [] }: SettingsDi
     () => localStorage.getItem("message_template") || ""
   );
 
-  const handleSave = () => {
+  const handleSave = async () => {
     // Validate: no duplicate telegram chat ids
     const tgChatIds = telegramDestinations.filter(d => d.chatId).map(d => d.chatId);
     if (new Set(tgChatIds).size !== tgChatIds.length) {
@@ -96,11 +96,28 @@ export const SettingsDialog = ({ open, onOpenChange, channels = [] }: SettingsDi
     localStorage.setItem("notifications_enabled", String(notificationsEnabled));
     localStorage.setItem("telegram_destinations", JSON.stringify(validTg));
     localStorage.setItem("whatsapp_destinations", JSON.stringify(validWa));
-    // ignored_channels now managed server-side
     localStorage.setItem("message_template", messageTemplate);
 
     setTelegramDestinations(validTg);
     setWhatsappDestinations(validWa);
+
+    // Sync destinations to backend DB (source of truth for notifications)
+    const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3001";
+    const allDestinations = [
+      ...validTg.map(d => ({ type: 'telegram', config: { botToken: d.botToken, chatId: d.chatId } })),
+      ...validWa.map(d => ({ type: 'whatsapp', config: { phone: d.phone, apiKey: d.apiKey } })),
+    ];
+    try {
+      await fetch(`${API_URL}/api/notification-destinations/sync`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ destinations: allDestinations }),
+      });
+    } catch (err) {
+      console.error('Erro ao sincronizar destinos:', err);
+      toast.error("Configs salvas localmente mas falha ao sincronizar com backend");
+      return;
+    }
 
     toast.success("Configurações salvas com sucesso!");
     onOpenChange(false);
