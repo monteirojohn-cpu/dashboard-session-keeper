@@ -21,7 +21,13 @@ app.post('/api/fetch-metrics', async (req, res) => {
       return res.json({ success: false, error: 'dashboardUrl, username e password são obrigatórios' });
     }
 
-    const sid = serverId || 'default';
+    // Resolve server ID: use explicit serverId, or look up by base_url, or fallback to 'default'
+    let sid = serverId || null;
+    if (!sid) {
+      const serverByUrl = db.prepare('SELECT id FROM servers WHERE base_url = ?').get(dashboardUrl);
+      sid = serverByUrl ? serverByUrl.id : 'default';
+    }
+
     const server = { base_url: dashboardUrl, username, password };
     const channels = await fetchChannelsFromServer(server);
 
@@ -33,7 +39,7 @@ app.post('/api/fetch-metrics', async (req, res) => {
       filteredChannels = channels.filter(ch => enabledIds.has(ch.id));
     }
 
-    // Enrich channels with persisted status data (fail_count driven)
+    // Enrich channels with persisted status data
     const allStatuses = db.prepare('SELECT * FROM channel_status WHERE server_id = ?').all(sid);
     const statusMap = new Map(allStatuses.map(s => [s.channel_id, s]));
 
