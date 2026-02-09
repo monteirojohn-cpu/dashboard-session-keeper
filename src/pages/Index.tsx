@@ -59,21 +59,16 @@ const Index = () => {
         };
       });
 
-      // Notify newly offline channels
-      const notificationsEnabled = localStorage.getItem("notifications_enabled") === "true";
-      let ignoredChannels: string[] = [];
-      try { ignoredChannels = JSON.parse(localStorage.getItem("ignored_channels") || "[]"); } catch {}
-
-      if (notificationsEnabled && prevChannels.length > 0) {
+      // Notifications are now handled by the backend worker (3-strike rule)
+      // Frontend only displays toast for user awareness
+      if (prevChannels.length > 0) {
         const newlyDown = parsedChannels.filter(
           (ch) =>
             (ch.status === "offline" || ch.status === "degraded") &&
-            !ignoredChannels.includes(ch.id) &&
             prevChannels.find((prev) => prev.id === ch.id && prev.status === "online")
         );
         if (newlyDown.length > 0) {
-          notifyOfflineChannels(newlyDown);
-          toast.error(`🚨 ${newlyDown.length} canal(is) caíram!`);
+          toast.error(`🚨 ${newlyDown.length} canal(is) com falha detectada`);
         }
       }
 
