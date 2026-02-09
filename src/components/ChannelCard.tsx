@@ -14,6 +14,9 @@ export interface Channel {
   health?: number;
   group?: string;
   statusSince?: number; // timestamp (ms) when status was set
+  onlineSince?: string | null; // ISO timestamp from backend
+  offlineSince?: string | null;
+  serverId?: string;
 }
 
 function formatElapsed(ms: number): string {
@@ -28,14 +31,21 @@ export const ChannelCard = ({ channel }: { channel: Channel }) => {
   const [elapsed, setElapsed] = useState("");
 
   useEffect(() => {
-    if (!channel.statusSince) return;
+    // Prefer persisted timestamp from backend
+    const since = channel.status === "online" && channel.onlineSince
+      ? new Date(channel.onlineSince).getTime()
+      : channel.status !== "online" && channel.offlineSince
+        ? new Date(channel.offlineSince).getTime()
+        : channel.statusSince;
+
+    if (!since) return;
     const update = () => {
-      setElapsed(formatElapsed(Date.now() - channel.statusSince!));
+      setElapsed(formatElapsed(Date.now() - since));
     };
     update();
     const id = setInterval(update, 1000);
     return () => clearInterval(id);
-  }, [channel.statusSince]);
+  }, [channel.statusSince, channel.onlineSince, channel.offlineSince, channel.status]);
 
   return (
     <div className={`group relative rounded-lg border bg-card p-5 transition-all duration-300 hover:border-muted-foreground/30 ${
