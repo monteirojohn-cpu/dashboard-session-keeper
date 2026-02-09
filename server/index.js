@@ -7,6 +7,97 @@ const PORT = process.env.API_PORT || 3001;
 app.use(cors());
 app.use(express.json());
 
+// ==================== SESSION CACHE ====================
+// Stores authenticated cookies per dashboardUrl to avoid re-login every request
+const sessionCache = {};
+const SESSION_MAX_AGE_MS = 5 * 60 * 1000; // Re-authenticate every 5 minutes
+
+async function getAuthenticatedCookies(dashboardUrl, username, password, forceRenew = false) {
+  const cacheKey = `${dashboardUrl}|${username}`;
+  const cached = sessionCache[cacheKey];
+
+  if (!forceRenew && cached && (Date.now() - cached.timestamp < SESSION_MAX_AGE_MS)) {
+    console.log(`[session] Usando sessão em cache (${Math.round((Date.now() - cached.timestamp) / 1000)}s atrás)`);
+    return { cookies: cached.cookies, fromCache: true };
+  }
+
+  console.log(`[session] ${forceRenew ? 'Forçando renovação' : 'Sessão expirada/inexistente'} - fazendo login em ${dashboardUrl}`);
+
+  // Step 1: Get login page for CSRF token
+  const loginPageRes = await fetch(`${dashboardUrl}/aaa/auth/login`, {
+    method: 'GET',
+    redirect: 'manual',
+  });
+  const loginPageHtml = await loginPageRes.text();
+  const loginPageCookies = extractCookies(loginPageRes.headers);
+
+  let csrfToken = '';
+  const csrfMetaMatch = loginPageHtml.match(/name="csrf-token"\s+content="([^"]+)"/);
+  const csrfInputMatch = loginPageHtml.match(/name="_csrf"\s+value="([^"]+)"/);
+  const csrfYiiMatch = loginPageHtml.match(/name="_csrf-frontend"\s+value="([^"]+)"/);
+  if (csrfMetaMatch) csrfToken = csrfMetaMatch[1];
+  else if (csrfInputMatch) csrfToken = csrfInputMatch[1];
+  else if (csrfYiiMatch) csrfToken = csrfYiiMatch[1];
+
+  console.log('[session] CSRF token:', csrfToken ? 'sim' : 'não');
+
+  // Step 2: Submit login
+  const formBody = new URLSearchParams();
+  formBody.append('LoginForm[username]', username);
+  formBody.append('LoginForm[password]', password);
+  if (csrfToken) {
+    formBody.append('_csrf-frontend', csrfToken);
+    formBody.append('_csrf', csrfToken);
+  }
+
+  const cookieHeader = Object.entries(loginPageCookies).map(([k, v]) => `${k}=${v}`).join('; ');
+
+  const loginRes = await fetch(`${dashboardUrl}/aaa/auth/login`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      'Cookie': cookieHeader,
+      'Referer': `${dashboardUrl}/aaa/auth/login`,
+    },
+    body: formBody.toString(),
+    redirect: 'manual',
+  });
+
+  const loginResponseCookies = extractCookies(loginRes.headers);
+  let allCookies = { ...loginPageCookies, ...loginResponseCookies };
+
+  console.log('[session] Login status:', loginRes.status);
+
+  // Step 3: Follow redirect
+  let finalCookies = allCookies;
+  if (loginRes.status === 301 || loginRes.status === 302) {
+    const redirectUrl = loginRes.headers.get('location');
+    if (redirectUrl) {
+      const fullRedirectUrl = redirectUrl.startsWith('http') ? redirectUrl : `${dashboardUrl}${redirectUrl}`;
+      const redirectCookieHeader = Object.entries(finalCookies).map(([k, v]) => `${k}=${v}`).join('; ');
+      const redirectRes = await fetch(fullRedirectUrl, {
+        method: 'GET',
+        headers: { 'Cookie': redirectCookieHeader },
+        redirect: 'manual',
+      });
+      const redirectCookies = extractCookies(redirectRes.headers);
+      finalCookies = { ...finalCookies, ...redirectCookies };
+      await redirectRes.text();
+    }
+  } else {
+    await loginRes.text();
+  }
+
+  // Step 4: Wait for session
+  await new Promise(resolve => setTimeout(resolve, 1000));
+
+  // Cache the session
+  sessionCache[cacheKey] = { cookies: finalCookies, timestamp: Date.now() };
+  console.log('[session] Sessão autenticada e salva no cache');
+
+  return { cookies: finalCookies, fromCache: false };
+}
+
 // ==================== FETCH METRICS ====================
 app.post('/api/fetch-metrics', async (req, res) => {
   try {
@@ -16,86 +107,33 @@ app.post('/api/fetch-metrics', async (req, res) => {
       return res.json({ success: false, error: 'dashboardUrl, username e password são obrigatórios' });
     }
 
-    console.log(`[fetch-metrics] Fazendo login em ${dashboardUrl}`);
+    // Get cookies (from cache or fresh login)
+    let { cookies: finalCookies, fromCache } = await getAuthenticatedCookies(dashboardUrl, username, password);
 
-    // Step 1: Get login page for CSRF token
-    const loginPageRes = await fetch(`${dashboardUrl}/aaa/auth/login`, {
-      method: 'GET',
-      redirect: 'manual',
-    });
-    const loginPageHtml = await loginPageRes.text();
-    const loginPageCookies = extractCookies(loginPageRes.headers);
+    // Fetch metrics
+    let metricsCookieHeader = Object.entries(finalCookies).map(([k, v]) => `${k}=${v}`).join('; ');
 
-    let csrfToken = '';
-    const csrfMetaMatch = loginPageHtml.match(/name="csrf-token"\s+content="([^"]+)"/);
-    const csrfInputMatch = loginPageHtml.match(/name="_csrf"\s+value="([^"]+)"/);
-    const csrfYiiMatch = loginPageHtml.match(/name="_csrf-frontend"\s+value="([^"]+)"/);
-    if (csrfMetaMatch) csrfToken = csrfMetaMatch[1];
-    else if (csrfInputMatch) csrfToken = csrfInputMatch[1];
-    else if (csrfYiiMatch) csrfToken = csrfYiiMatch[1];
-
-    console.log('[fetch-metrics] CSRF token:', csrfToken ? 'sim' : 'não');
-
-    // Step 2: Submit login
-    const formBody = new URLSearchParams();
-    formBody.append('LoginForm[username]', username);
-    formBody.append('LoginForm[password]', password);
-    if (csrfToken) {
-      formBody.append('_csrf-frontend', csrfToken);
-      formBody.append('_csrf', csrfToken);
-    }
-
-    const cookieHeader = Object.entries(loginPageCookies).map(([k, v]) => `${k}=${v}`).join('; ');
-
-    const loginRes = await fetch(`${dashboardUrl}/aaa/auth/login`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'Cookie': cookieHeader,
-        'Referer': `${dashboardUrl}/aaa/auth/login`,
-      },
-      body: formBody.toString(),
-      redirect: 'manual',
-    });
-
-    const loginResponseCookies = extractCookies(loginRes.headers);
-    let allCookies = { ...loginPageCookies, ...loginResponseCookies };
-
-    console.log('[fetch-metrics] Login status:', loginRes.status);
-
-    // Step 3: Follow redirect
-    let finalCookies = allCookies;
-    if (loginRes.status === 301 || loginRes.status === 302) {
-      const redirectUrl = loginRes.headers.get('location');
-      if (redirectUrl) {
-        const fullRedirectUrl = redirectUrl.startsWith('http') ? redirectUrl : `${dashboardUrl}${redirectUrl}`;
-        const redirectCookieHeader = Object.entries(finalCookies).map(([k, v]) => `${k}=${v}`).join('; ');
-        const redirectRes = await fetch(fullRedirectUrl, {
-          method: 'GET',
-          headers: { 'Cookie': redirectCookieHeader },
-          redirect: 'manual',
-        });
-        const redirectCookies = extractCookies(redirectRes.headers);
-        finalCookies = { ...finalCookies, ...redirectCookies };
-        await redirectRes.text();
-      }
-    } else {
-      await loginRes.text();
-    }
-
-    // Step 4: Wait for session
-    await new Promise(resolve => setTimeout(resolve, 1000));
-
-    // Step 5: Fetch metrics
-    const metricsCookieHeader = Object.entries(finalCookies).map(([k, v]) => `${k}=${v}`).join('; ');
-
-    const metricsRes = await fetch(`${dashboardUrl}/origin/channel/metrics`, {
+    let metricsRes = await fetch(`${dashboardUrl}/origin/channel/metrics`, {
       method: 'GET',
       headers: {
         'Cookie': metricsCookieHeader,
         'Accept': 'application/json, text/html, */*',
       },
     });
+
+    // If session expired (got 401/403), force re-login and retry
+    if (fromCache && [401, 403].includes(metricsRes.status)) {
+      console.log('[fetch-metrics] Sessão em cache expirou, renovando...');
+      const renewed = await getAuthenticatedCookies(dashboardUrl, username, password, true);
+      metricsCookieHeader = Object.entries(renewed.cookies).map(([k, v]) => `${k}=${v}`).join('; ');
+      metricsRes = await fetch(`${dashboardUrl}/origin/channel/metrics`, {
+        method: 'GET',
+        headers: {
+          'Cookie': metricsCookieHeader,
+          'Accept': 'application/json, text/html, */*',
+        },
+      });
+    }
 
     const metricsText = await metricsRes.text();
     console.log('[fetch-metrics] Metrics status:', metricsRes.status);

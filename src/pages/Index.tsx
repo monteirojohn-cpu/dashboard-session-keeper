@@ -72,9 +72,16 @@ const Index = () => {
 
       // Check for newly offline channels and notify
       const notificationsEnabled = localStorage.getItem("notifications_enabled") === "true";
+      let ignoredChannels: string[] = [];
+      try {
+        ignoredChannels = JSON.parse(localStorage.getItem("ignored_channels") || "[]");
+      } catch {}
+
       if (notificationsEnabled && prevChannels.length > 0) {
         const newlyDown = parsedChannels.filter(
-          (ch) => (ch.status === "offline" || ch.status === "degraded") &&
+          (ch) =>
+            (ch.status === "offline" || ch.status === "degraded") &&
+            !ignoredChannels.includes(ch.id) &&
             prevChannels.find((prev) => prev.id === ch.id && prev.status === "online")
         );
         if (newlyDown.length > 0) {
@@ -231,7 +238,7 @@ const Index = () => {
         )}
       </main>
 
-      <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
+      <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} channels={channels} />
     </div>
   );
 };
