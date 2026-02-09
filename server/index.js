@@ -212,6 +212,23 @@ app.delete('/api/notification-destinations/:id', (req, res) => {
   res.json({ success: true });
 });
 
+// Bulk sync: replace all destinations at once
+app.put('/api/notification-destinations/sync', (req, res) => {
+  const { destinations } = req.body;
+  if (!Array.isArray(destinations)) return res.status(400).json({ success: false, error: 'destinations[] obrigatório' });
+  const tx = db.transaction(() => {
+    db.prepare('DELETE FROM notification_destinations').run();
+    const insert = db.prepare('INSERT INTO notification_destinations (type, config) VALUES (?, ?)');
+    for (const dest of destinations) {
+      if (dest.type && dest.config) {
+        insert.run(dest.type, JSON.stringify(dest.config));
+      }
+    }
+  });
+  tx();
+  res.json({ success: true });
+});
+
 // ==================== MESSAGE TEMPLATES ====================
 app.get('/api/templates', (req, res) => {
   const templates = db.prepare('SELECT * FROM message_templates ORDER BY scope').all();
