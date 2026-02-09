@@ -25,11 +25,19 @@ app.post('/api/fetch-metrics', async (req, res) => {
     const server = { base_url: dashboardUrl, username, password };
     const channels = await fetchChannelsFromServer(server);
 
+    // Filter by monitored_channels if any selection exists for this server
+    const monitoredRows = db.prepare('SELECT * FROM monitored_channels WHERE server_id = ?').all(sid);
+    let filteredChannels = channels;
+    if (monitoredRows.length > 0) {
+      const enabledIds = new Set(monitoredRows.filter(r => r.enabled).map(r => r.channel_id));
+      filteredChannels = channels.filter(ch => enabledIds.has(ch.id));
+    }
+
     // Enrich channels with persisted status data (fail_count driven)
     const allStatuses = db.prepare('SELECT * FROM channel_status WHERE server_id = ?').all(sid);
     const statusMap = new Map(allStatuses.map(s => [s.channel_id, s]));
 
-    const enrichedChannels = channels.map(ch => {
+    const enrichedChannels = filteredChannels.map(ch => {
       const persisted = statusMap.get(ch.id);
       return {
         ...ch,
@@ -39,7 +47,7 @@ app.post('/api/fetch-metrics', async (req, res) => {
       };
     });
 
-    res.json({ success: true, channels: enrichedChannels, rawLength: 0 });
+    res.json({ success: true, channels: enrichedChannels, totalChannels: channels.length, rawLength: 0 });
   } catch (error) {
     console.error('[fetch-metrics] Erro:', error);
     res.json({ success: false, error: error.message || 'Erro desconhecido' });
