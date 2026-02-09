@@ -64,9 +64,7 @@ export const SettingsDialog = ({ open, onOpenChange, channels = [] }: SettingsDi
     () => loadJsonArray<WhatsappDest>("whatsapp_destinations", [])
   );
 
-  const [ignoredChannels, setIgnoredChannels] = useState<string[]>(
-    () => loadJsonArray<string>("ignored_channels", [])
-  );
+  // Legacy ignored_channels no longer needed - managed server-side
 
   const [messageTemplate, setMessageTemplate] = useState(
     () => localStorage.getItem("message_template") || ""
@@ -98,7 +96,7 @@ export const SettingsDialog = ({ open, onOpenChange, channels = [] }: SettingsDi
     localStorage.setItem("notifications_enabled", String(notificationsEnabled));
     localStorage.setItem("telegram_destinations", JSON.stringify(validTg));
     localStorage.setItem("whatsapp_destinations", JSON.stringify(validWa));
-    localStorage.setItem("ignored_channels", JSON.stringify(ignoredChannels));
+    // ignored_channels now managed server-side
     localStorage.setItem("message_template", messageTemplate);
 
     setTelegramDestinations(validTg);
@@ -142,11 +140,7 @@ export const SettingsDialog = ({ open, onOpenChange, channels = [] }: SettingsDi
           </TabsContent>
 
           <TabsContent value="channels" className="mt-4 flex-1 flex flex-col min-h-0">
-            <ChannelsTab
-              channels={channels}
-              ignoredChannels={ignoredChannels}
-              setIgnoredChannels={setIgnoredChannels}
-            />
+            <ChannelsTab channels={channels} />
           </TabsContent>
 
           <TabsContent value="templates" className="mt-4 flex-1 min-h-0">
