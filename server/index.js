@@ -2,7 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const { getDb } = require('./db');
 const { fetchChannelsFromServer } = require('./metrics');
-const { startWorker } = require('./worker');
+const { startWorker, getWeeklyReportData, buildSummaryMessage, generateReportPDF, formatDuration, toBRTime, toBRDate } = require('./worker');
 
 const app = express();
 const PORT = process.env.API_PORT || 3001;
@@ -408,6 +408,60 @@ app.get('/api/debug/metrics', async (req, res) => {
     console.error('[debug/metrics] Erro:', error);
     res.json({ success: false, error: error.message });
   }
+});
+
+// ==================== WEEKLY REPORT ENDPOINTS ====================
+app.get('/api/reports/weekly', (req, res) => {
+  try {
+    const { start, end, serverId } = req.query;
+    if (!start || !end) return res.status(400).json({ success: false, error: 'start e end obrigatórios (YYYY-MM-DD)' });
+    const data = getWeeklyReportData(db, start, end, serverId || 'all');
+    res.json({ success: true, ...data });
+  } catch (error) {
+    res.json({ success: false, error: error.message });
+  }
+});
+
+app.get('/api/reports/weekly.pdf', async (req, res) => {
+  try {
+    const { start, end, serverId } = req.query;
+    if (!start || !end) return res.status(400).json({ success: false, error: 'start e end obrigatórios (YYYY-MM-DD)' });
+    const sid = serverId || 'all';
+    const data = getWeeklyReportData(db, start, end, sid);
+    const startStr = toBRDate(new Date(start));
+    const endStr = toBRDate(new Date(end));
+    const pdfBuffer = await generateReportPDF(data, sid, startStr, endStr);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="relatorio-semanal-${start}-${end}.pdf"`);
+    res.send(pdfBuffer);
+  } catch (error) {
+    res.json({ success: false, error: error.message });
+  }
+});
+
+// ==================== REPORT SETTINGS ====================
+app.get('/api/report-settings', (req, res) => {
+  const keys = ['enable_auto_reports', 'report_frequency', 'report_day_of_week', 'report_time',
+    'report_timezone', 'report_server_id', 'report_send_pdf', 'report_send_summary', 'last_weekly_report_key'];
+  const settings = {};
+  for (const key of keys) {
+    const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key);
+    settings[key] = row ? row.value : null;
+  }
+  res.json({ success: true, settings });
+});
+
+app.put('/api/report-settings', (req, res) => {
+  const allowed = ['enable_auto_reports', 'report_frequency', 'report_day_of_week', 'report_time',
+    'report_timezone', 'report_server_id', 'report_send_pdf', 'report_send_summary'];
+  const upsert = db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)');
+  const tx = db.transaction(() => {
+    for (const [k, v] of Object.entries(req.body)) {
+      if (allowed.includes(k)) upsert.run(k, String(v));
+    }
+  });
+  tx();
+  res.json({ success: true });
 });
 
 // ==================== START ====================
