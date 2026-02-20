@@ -53,7 +53,7 @@ migrateLegacyDestinations();
 export const SettingsDialog = ({ open, onOpenChange, channels = [] }: SettingsDialogProps) => {
   const [dashboardUrl, setDashboardUrl] = useState(() => localStorage.getItem("dashboard_url") || "http://157.254.55.203:8089");
   const [dashboardUser, setDashboardUser] = useState(() => localStorage.getItem("dashboard_user") || "admin");
-  const [dashboardPass, setDashboardPass] = useState(() => localStorage.getItem("dashboard_pass") || "");
+  const [dashboardPass, setDashboardPass] = useState(() => localStorage.getItem("dashboard_pass") || "admin@signal.2025");
   const [autoRefreshInterval, setAutoRefreshInterval] = useState(() => localStorage.getItem("auto_refresh_interval") || "30");
   const [sessionRenewalInterval, setSessionRenewalInterval] = useState(() => localStorage.getItem("session_renewal_interval") || "5");
   const [notificationsEnabled, setNotificationsEnabled] = useState(() => localStorage.getItem("notifications_enabled") === "true");
