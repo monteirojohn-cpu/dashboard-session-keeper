@@ -103,7 +103,7 @@ export const SettingsDialog = ({ open, onOpenChange, channels = [] }: SettingsDi
     setWhatsappDestinations(validWa);
 
     // Sync destinations to backend DB (source of truth for notifications)
-    const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3001";
+    const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3101";
     const allDestinations = [
       ...validTg.map(d => ({ type: 'telegram', config: { botToken: d.botToken, chatId: d.chatId } })),
       ...validWa.map(d => ({ type: 'whatsapp', config: { phone: d.phone, apiKey: d.apiKey } })),
