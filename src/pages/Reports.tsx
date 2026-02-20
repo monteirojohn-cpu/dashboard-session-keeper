@@ -4,7 +4,7 @@ import { Input } from "@/components/ui/input";
 import { ArrowLeft, Download, BarChart3, Clock, AlertTriangle } from "lucide-react";
 import { Link } from "react-router-dom";
 
-const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3001";
+import { API_URL } from "@/lib/api";
 
 interface OutageEvent {
   id: number;
