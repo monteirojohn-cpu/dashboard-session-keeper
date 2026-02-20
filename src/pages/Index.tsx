@@ -6,7 +6,7 @@ import { SettingsDialog } from "@/components/SettingsDialog";
 import { toast } from "sonner";
 import { Loader2, ServerOff } from "lucide-react";
 
-const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3001";
+const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3101";
 
 interface TelegramDest { botToken: string; chatId: string; }
 interface WhatsappDest { phone: string; apiKey: string; }
