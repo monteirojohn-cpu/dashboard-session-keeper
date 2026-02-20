@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Plus, X, Send, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 
-const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3001";
+import { API_URL } from "@/lib/api";
 
 export interface TelegramDest {
   botToken: string;

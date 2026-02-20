@@ -7,7 +7,7 @@ import { Copy, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import type { Channel } from "@/components/ChannelCard";
 
-const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3001";
+import { API_URL } from "@/lib/api";
 
 interface Server {
   id: string;
